@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, Component } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -17,92 +17,146 @@ import {
 import type { ClaudeThinkingContent, ClaudeToolUseContent } from '../../../../shared/types'
 import type { AssistantTurn, AssistantContentGroup, ToolPair } from '../../utils/messageGrouper'
 
-// ─── Markdown renderer ────────────────────────────────────────────────────────
+// ─── Fallback plain-text markdown renderer ────────────────────────────────────
+
+function inlineFormat(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = []
+  let remaining = text
+  let key = 0
+  while (remaining.length > 0) {
+    const boldIdx = remaining.indexOf('**')
+    const codeIdx = remaining.indexOf('`')
+    if (boldIdx === -1 && codeIdx === -1) {
+      parts.push(<span key={key++}>{remaining}</span>); break
+    }
+    const firstBold = boldIdx === -1 ? Infinity : boldIdx
+    const firstCode = codeIdx === -1 ? Infinity : codeIdx
+    if (firstBold <= firstCode) {
+      const end = remaining.indexOf('**', firstBold + 2)
+      if (end === -1) { parts.push(<span key={key++}>{remaining}</span>); break }
+      if (firstBold > 0) parts.push(<span key={key++}>{remaining.slice(0, firstBold)}</span>)
+      parts.push(<strong key={key++} className="font-semibold text-claude-text">{remaining.slice(firstBold + 2, end)}</strong>)
+      remaining = remaining.slice(end + 2)
+    } else {
+      const end = remaining.indexOf('`', firstCode + 1)
+      if (end === -1) { parts.push(<span key={key++}>{remaining}</span>); break }
+      if (firstCode > 0) parts.push(<span key={key++}>{remaining.slice(0, firstCode)}</span>)
+      parts.push(<code key={key++} className="font-mono text-xs bg-black/30 px-1 py-0.5 rounded text-blue-300">{remaining.slice(firstCode + 1, end)}</code>)
+      remaining = remaining.slice(end + 1)
+    }
+  }
+  return parts
+}
+
+function PlainMarkdown({ text }: { text: string }): React.JSX.Element {
+  const lines = text.split('\n')
+  const elements: React.JSX.Element[] = []
+  let inCode = false
+  let codeLang = ''
+  let codeLines: string[] = []
+  let key = 0
+  for (const line of lines) {
+    if (line.startsWith('```')) {
+      if (inCode) {
+        elements.push(
+          <pre key={key++} className="bg-black/40 rounded-lg p-3 overflow-x-auto my-2 text-xs font-mono text-green-300">
+            {codeLines.join('\n')}
+          </pre>
+        )
+        inCode = false; codeLines = []; codeLang = ''
+      } else { inCode = true; codeLang = line.slice(3).trim() }
+      continue
+    }
+    if (inCode) { codeLines.push(line); continue }
+    if (line.startsWith('### '))
+      elements.push(<h3 key={key++} className="text-sm font-semibold text-claude-text mt-3 mb-1">{inlineFormat(line.slice(4))}</h3>)
+    else if (line.startsWith('## '))
+      elements.push(<h2 key={key++} className="text-sm font-bold text-claude-text mt-3 mb-1">{inlineFormat(line.slice(3))}</h2>)
+    else if (line.startsWith('# '))
+      elements.push(<h1 key={key++} className="text-base font-bold text-claude-text mt-3 mb-1">{inlineFormat(line.slice(2))}</h1>)
+    else if (line.startsWith('- ') || line.startsWith('* '))
+      elements.push(<li key={key++} className="text-sm text-claude-text ml-4 list-disc">{inlineFormat(line.slice(2))}</li>)
+    else if (/^\d+\. /.test(line))
+      elements.push(<li key={key++} className="text-sm text-claude-text ml-4 list-decimal">{inlineFormat(line.replace(/^\d+\. /, ''))}</li>)
+    else if (line.trim() === '')
+      elements.push(<div key={key++} className="h-2" />)
+    else
+      elements.push(<p key={key++} className="text-sm text-claude-text leading-relaxed">{inlineFormat(line)}</p>)
+  }
+  if (inCode && codeLines.length > 0) {
+    elements.push(
+      <pre key={key++} className="bg-black/40 rounded-lg p-3 overflow-x-auto my-2 text-xs font-mono text-green-300">
+        {codeLines.join('\n')}
+      </pre>
+    )
+  }
+  return <div className="space-y-0.5">{elements}</div>
+}
+
+// ─── React-markdown with error boundary ───────────────────────────────────────
+
+interface MdErrorState { hasError: boolean }
+
+class MdErrorBoundary extends Component<{ text: string; children: React.ReactNode }, MdErrorState> {
+  constructor(props: { text: string; children: React.ReactNode }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError(): MdErrorState { return { hasError: true } }
+  render(): React.ReactNode {
+    if (this.state.hasError) return <PlainMarkdown text={this.props.text} />
+    return this.props.children
+  }
+}
 
 function MarkdownRenderer({ text }: { text: string }): React.JSX.Element {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        code({ className, children, ...props }: any) {
-          const match = /language-(\w+)/.exec(className || '')
-          const isInline = !match
-          if (!isInline) {
+    <MdErrorBoundary text={text}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          code({ className, children, ...props }: any) {
+            const match = /language-(\w+)/.exec(className || '')
+            if (match) {
+              return (
+                <SyntaxHighlighter
+                  style={oneDark as Record<string, React.CSSProperties>}
+                  language={match[1]}
+                  PreTag="div"
+                  customStyle={{ borderRadius: '0.5rem', fontSize: '0.75rem', margin: '0.5rem 0' }}
+                >
+                  {String(children).replace(/\n$/, '')}
+                </SyntaxHighlighter>
+              )
+            }
             return (
-              <SyntaxHighlighter
-                style={oneDark as Record<string, React.CSSProperties>}
-                language={match![1]}
-                PreTag="div"
-                customStyle={{ borderRadius: '0.5rem', fontSize: '0.75rem', margin: '0.5rem 0' }}
-              >
-                {String(children).replace(/\n$/, '')}
-              </SyntaxHighlighter>
+              <code className="font-mono text-xs bg-black/30 px-1 py-0.5 rounded text-blue-300" {...props}>
+                {children}
+              </code>
             )
-          }
-          return (
-            <code
-              className="font-mono text-xs bg-black/30 px-1 py-0.5 rounded text-blue-300"
-              {...props}
-            >
-              {children}
-            </code>
-          )
-        },
-        p: ({ children }) => (
-          <p className="text-sm text-claude-text leading-relaxed mb-2 last:mb-0">{children}</p>
-        ),
-        h1: ({ children }) => (
-          <h1 className="text-base font-bold text-claude-text mt-3 mb-1">{children}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className="text-sm font-bold text-claude-text mt-3 mb-1">{children}</h2>
-        ),
-        h3: ({ children }) => (
-          <h3 className="text-sm font-semibold text-claude-text mt-2 mb-1">{children}</h3>
-        ),
-        ul: ({ children }) => (
-          <ul className="list-disc ml-4 space-y-0.5 mb-2">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="list-decimal ml-4 space-y-0.5 mb-2">{children}</ol>
-        ),
-        li: ({ children }) => (
-          <li className="text-sm text-claude-text">{children}</li>
-        ),
-        blockquote: ({ children }) => (
-          <blockquote className="border-l-2 border-claude-orange/50 pl-3 text-claude-muted italic my-2">
-            {children}
-          </blockquote>
-        ),
-        a: ({ children, href }) => (
-          <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        ),
-        strong: ({ children }) => (
-          <strong className="font-semibold text-claude-text">{children}</strong>
-        ),
-        em: ({ children }) => <em className="italic text-claude-muted">{children}</em>,
-        hr: () => <hr className="border-claude-border my-3" />,
-        table: ({ children }) => (
-          <div className="overflow-x-auto mb-2">
-            <table className="text-xs text-claude-text border-collapse w-full">{children}</table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th className="border border-claude-border px-2 py-1 bg-claude-hover font-semibold text-left">
-            {children}
-          </th>
-        ),
-        td: ({ children }) => (
-          <td className="border border-claude-border px-2 py-1">{children}</td>
-        ),
-        pre: ({ children }) => <>{children}</>,
-      }}
-    >
-      {text}
-    </ReactMarkdown>
+          },
+          p: ({ children }: { children?: React.ReactNode }) => <p className="text-sm text-claude-text leading-relaxed mb-2 last:mb-0">{children}</p>,
+          h1: ({ children }: { children?: React.ReactNode }) => <h1 className="text-base font-bold text-claude-text mt-3 mb-1">{children}</h1>,
+          h2: ({ children }: { children?: React.ReactNode }) => <h2 className="text-sm font-bold text-claude-text mt-3 mb-1">{children}</h2>,
+          h3: ({ children }: { children?: React.ReactNode }) => <h3 className="text-sm font-semibold text-claude-text mt-2 mb-1">{children}</h3>,
+          ul: ({ children }: { children?: React.ReactNode }) => <ul className="list-disc ml-4 space-y-0.5 mb-2">{children}</ul>,
+          ol: ({ children }: { children?: React.ReactNode }) => <ol className="list-decimal ml-4 space-y-0.5 mb-2">{children}</ol>,
+          li: ({ children }: { children?: React.ReactNode }) => <li className="text-sm text-claude-text">{children}</li>,
+          blockquote: ({ children }: { children?: React.ReactNode }) => <blockquote className="border-l-2 border-claude-orange/50 pl-3 text-claude-muted italic my-2">{children}</blockquote>,
+          a: ({ children, href }: { children?: React.ReactNode; href?: string }) => <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noreferrer">{children}</a>,
+          strong: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold text-claude-text">{children}</strong>,
+          em: ({ children }: { children?: React.ReactNode }) => <em className="italic text-claude-muted">{children}</em>,
+          hr: () => <hr className="border-claude-border my-3" />,
+          table: ({ children }: { children?: React.ReactNode }) => <div className="overflow-x-auto mb-2"><table className="text-xs text-claude-text border-collapse w-full">{children}</table></div>,
+          th: ({ children }: { children?: React.ReactNode }) => <th className="border border-claude-border px-2 py-1 bg-claude-hover font-semibold text-left">{children}</th>,
+          td: ({ children }: { children?: React.ReactNode }) => <td className="border border-claude-border px-2 py-1">{children}</td>,
+          pre: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+        } as Record<string, unknown>}
+      >
+        {text}
+      </ReactMarkdown>
+    </MdErrorBoundary>
   )
 }
 

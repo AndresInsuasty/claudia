@@ -31,30 +31,23 @@ const TABS: TabDef[] = [
 function SessionView({ session }: { session: Session }): React.JSX.Element {
   const isActive = session.status === 'active'
   const [activeTab, setActiveTab] = useState<TabId>('logs')
-  const [terminalOpen, setTerminalOpen] = useState(false)
   const [showNewSession, setShowNewSession] = useState(false)
+  const { terminalSessionId, openTerminalForSession, closeTerminal } = useSessionStore()
 
+  const terminalOpen = terminalSessionId === session.id
   const currentTab = isActive ? activeTab : (activeTab === 'code' ? 'logs' : activeTab)
 
   const handleResume = useCallback(async () => {
-    const result = await window.api.terminal.create(session.id, session.projectPath)
-    if (result.success) {
-      setTerminalOpen(true)
-      // Type the resume command into the terminal after a short delay
-      setTimeout(() => {
-        window.api.terminal.write(session.id, `claude --resume ${session.id}\r`)
-      }, 500)
-    }
-  }, [session.id, session.projectPath])
+    await openTerminalForSession(session.id, session.projectPath)
+  }, [session.id, session.projectPath, openTerminalForSession])
 
   const handleRollback = useCallback(async () => {
     await window.api.git.stash(session.projectPath)
   }, [session.projectPath])
 
   const handleCloseTerminal = useCallback(async () => {
-    await window.api.terminal.kill(session.id)
-    setTerminalOpen(false)
-  }, [session.id])
+    await closeTerminal()
+  }, [closeTerminal])
 
   const handleLaunchNew = async (projectPath: string, _branch: string) => {
     const result = await window.api.terminal.create(`new-${Date.now()}`, projectPath)
@@ -117,19 +110,29 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
       {/* Main content area — tabs left, terminal right */}
       <div className="flex flex-1 overflow-hidden">
         {/* Tab content */}
-        <div className={`flex flex-col overflow-hidden ${terminalOpen ? 'flex-1' : 'flex-1'}`}>
+        <div className={`flex flex-col overflow-hidden ${terminalOpen ? 'w-[55%]' : 'flex-1'}`}>
           {currentTab === 'logs'        && <LogsTab session={session} />}
           {currentTab === 'session'     && <SessionInfoTab session={session} />}
           {currentTab === 'consumption' && <ConsumptionTab session={session} />}
           {currentTab === 'code'        && isActive && <CodeTab session={session} />}
         </div>
 
-        {/* Terminal pane — right side, active sessions only */}
-        {terminalOpen && isActive && (
+        {/* Terminal pane — right side, shows for active sessions automatically */}
+        {terminalOpen && (
           <div className="w-[45%] min-w-[320px] border-l border-claude-border flex flex-col">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-claude-panel border-b border-claude-border shrink-0">
-              <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
-              <span className="text-xs text-claude-muted">Terminal</span>
+            <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-claude-panel border-b border-claude-border shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
+                <span className="text-xs text-claude-text font-medium">Terminal</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" title="Connected" />
+              </div>
+              <button
+                onClick={handleCloseTerminal}
+                className="text-claude-muted hover:text-claude-text text-xs px-2 py-0.5 rounded hover:bg-claude-hover transition-colors"
+                title="Close terminal"
+              >
+                ✕
+              </button>
             </div>
             <div className="flex-1 overflow-hidden">
               <TerminalPane sessionId={session.id} />

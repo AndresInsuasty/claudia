@@ -5,8 +5,16 @@ import MainPanel from './components/Layout/MainPanel'
 import type { Session, ClaudeMessage } from '../../shared/types'
 
 export default function App(): React.JSX.Element {
-  const { loadSessions, loadProjects, loadSettings, addSession, updateSession, addMessage } =
-    useSessionStore()
+  const {
+    loadSessions,
+    loadProjects,
+    loadSettings,
+    addSession,
+    updateSession,
+    addMessage,
+    openTerminalForSession,
+    selectSession
+  } = useSessionStore()
 
   useEffect(() => {
     loadSessions()
@@ -22,7 +30,15 @@ export default function App(): React.JSX.Element {
     })
 
     const offSessionStarted = window.api.on('event:sessionStarted', (session: unknown) => {
-      updateSession(session as Session)
+      const sess = session as Session
+      updateSession(sess)
+
+      // Auto-open terminal for active sessions
+      if (sess.status === 'active') {
+        openTerminalForSession(sess.id, sess.projectPath)
+        // Auto-select the session to show it in the UI
+        selectSession(sess.id)
+      }
     })
 
     const offMessageAdded = window.api.on(

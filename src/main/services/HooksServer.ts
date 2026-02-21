@@ -1,7 +1,7 @@
 import http from 'http'
 import { BrowserWindow } from 'electron'
 import { sessionDb } from './Database'
-import { markSessionActive, markSessionCompleted } from './FileWatcher'
+import { markSessionActive, markSessionCompleted, forceProcessSession } from './FileWatcher'
 
 let server: http.Server | null = null
 
@@ -60,10 +60,17 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
     case 'SessionStart': {
       if (sessionId) {
         markSessionActive(sessionId)
-        const session = sessionDb.getById(sessionId)
-        if (session) {
-          win.webContents.send('event:sessionStarted', session)
+        const tryNotifyStart = (attempts = 0) => {
+          const session = sessionDb.getById(sessionId)
+          if (session) {
+            win.webContents.send('event:sessionStarted', session)
+          } else if (attempts < 10) {
+            setTimeout(() => {
+              forceProcessSession(sessionId, win).then(() => tryNotifyStart(attempts + 1))
+            }, 500)
+          }
         }
+        tryNotifyStart()
       }
       break
     }
@@ -72,10 +79,17 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
     case 'SessionEnd': {
       if (sessionId) {
         markSessionCompleted(sessionId)
-        const session = sessionDb.getById(sessionId)
-        if (session) {
-          win.webContents.send('event:sessionUpdated', session)
+        const tryNotifyStop = (attempts = 0) => {
+          const session = sessionDb.getById(sessionId)
+          if (session) {
+            win.webContents.send('event:sessionUpdated', session)
+          } else if (attempts < 10) {
+            setTimeout(() => {
+              forceProcessSession(sessionId, win).then(() => tryNotifyStop(attempts + 1))
+            }, 500)
+          }
         }
+        tryNotifyStop()
       }
       break
     }

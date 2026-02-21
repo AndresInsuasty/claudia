@@ -9,6 +9,7 @@ interface SessionStore {
   settings: AppSettings | null
   isLoading: boolean
   sidebarView: 'sessions' | 'projects'
+  terminalSessionId: string | null
 
   loadSessions: () => Promise<void>
   loadProjects: () => Promise<void>
@@ -22,6 +23,8 @@ interface SessionStore {
   setSidebarView: (view: 'sessions' | 'projects') => void
   deleteSession: (id: string) => Promise<void>
   updateSessionTitle: (id: string, title: string) => Promise<void>
+  openTerminalForSession: (sessionId: string, projectPath: string) => Promise<void>
+  closeTerminal: () => Promise<void>
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
@@ -32,6 +35,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   settings: null,
   isLoading: false,
   sidebarView: 'sessions',
+  terminalSessionId: null,
 
   loadSessions: async () => {
     set({ isLoading: true })
@@ -125,5 +129,30 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set(state => ({
       sessions: state.sessions.map(s => s.id === id ? { ...s, title } : s)
     }))
+  },
+
+  openTerminalForSession: async (sessionId, projectPath) => {
+    const currentTerminal = get().terminalSessionId
+    // Close previous terminal if exists
+    if (currentTerminal && currentTerminal !== sessionId) {
+      await window.api.terminal.kill(currentTerminal)
+    }
+
+    const result = await window.api.terminal.create(sessionId, projectPath)
+    if (result.success) {
+      set({ terminalSessionId: sessionId })
+      // Auto-resume the session in the terminal
+      setTimeout(() => {
+        window.api.terminal.write(sessionId, `claude --resume ${sessionId}\r`)
+      }, 500)
+    }
+  },
+
+  closeTerminal: async () => {
+    const sessionId = get().terminalSessionId
+    if (sessionId) {
+      await window.api.terminal.kill(sessionId)
+      set({ terminalSessionId: null })
+    }
   }
 }))

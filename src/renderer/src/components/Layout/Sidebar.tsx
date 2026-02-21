@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { MessageSquare, FolderOpen, Settings, Plus, Search } from 'lucide-react'
 import SessionItem from '../Sessions/SessionItem'
-import ProjectGroup from '../Sessions/ProjectGroup'
 import SettingsPanel from '../Settings/SettingsPanel'
 import type { Session } from '../../../../shared/types'
 
@@ -22,14 +21,10 @@ export default function Sidebar(): React.JSX.Element {
     )
   }, [sessions, search])
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, Session[]>()
-    for (const s of filtered) {
-      const key = s.projectName
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(s)
-    }
-    return map
+  const sorted = useMemo(() => {
+    return [...filtered].sort(
+      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+    )
   }, [filtered])
 
   return (
@@ -96,17 +91,16 @@ export default function Sidebar(): React.JSX.Element {
 
         <div className="flex-1 overflow-y-auto px-2">
           {sidebarView === 'sessions' ? (
-            <div className="space-y-0.5">
-              {Array.from(grouped.entries()).map(([project, projectSessions]) => (
-                <ProjectGroup
-                  key={project}
-                  projectName={project}
-                  sessions={projectSessions}
-                  selectedSessionId={selectedSessionId}
+            <div className="flex flex-col gap-2 py-1">
+              {sorted.map(session => (
+                <SessionItem
+                  key={session.id}
+                  session={session}
+                  isSelected={selectedSessionId === session.id}
                   onSelect={selectSession}
                 />
               ))}
-              {filtered.length === 0 && (
+              {sorted.length === 0 && (
                 <div className="text-center text-claude-muted text-xs py-8">
                   {search ? 'No sessions found' : 'No sessions yet.\nStart Claude Code in your terminal.'}
                 </div>

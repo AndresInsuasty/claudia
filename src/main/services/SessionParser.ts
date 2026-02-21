@@ -168,14 +168,15 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   }
 }
 
-export function deriveSessionTitle(messages: ClaudeMessage[]): string {
+export function deriveSessionTitle(messages: ClaudeMessage[]): string | null {
   const firstUserMsg = messages.find(m => m.role === 'user')
-  if (!firstUserMsg) return 'New Session'
+  if (!firstUserMsg) return null
 
   const textContent = firstUserMsg.content.find(c => c.type === 'text')
-  if (!textContent || textContent.type !== 'text') return 'New Session'
+  if (!textContent || textContent.type !== 'text') return null
 
   const text = textContent.text.trim()
+  if (!text) return null
   return text.length > 60 ? text.substring(0, 60) + '…' : text
 }
 

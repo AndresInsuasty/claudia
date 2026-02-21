@@ -68,12 +68,13 @@ async function importExistingSessions(win: BrowserWindow): Promise<void> {
         const projectName = deriveProjectName(projectPath)
         sessionDb.updateProjectPath(sessionId, projectPath, projectName)
       }
+      const { messages: existingMsgs } = await parseTranscriptFile(transcriptPath)
       watchedFiles.set(transcriptPath, {
         sessionId,
         projectPath,
         transcriptPath,
         lastSize: fs.existsSync(transcriptPath) ? fs.statSync(transcriptPath).size : 0,
-        lastLineCount: 0
+        lastLineCount: existingMsgs.length
       })
       continue
     }
@@ -174,6 +175,22 @@ async function processNewTranscript(
   })
 
   win.webContents.send('event:newSession', session)
+}
+
+export async function forceProcessSession(
+  sessionId: string,
+  win: BrowserWindow
+): Promise<void> {
+  if (watchedFiles.has(sessionId)) return
+
+  const found = await scanClaudeProjects()
+  const target = found.find(f => f.sessionId === sessionId)
+  if (!target) return
+
+  const alreadyWatched = Array.from(watchedFiles.values()).some(w => w.sessionId === sessionId)
+  if (alreadyWatched) return
+
+  await processNewTranscript(target.sessionId, target.projectPath, target.transcriptPath, win)
 }
 
 export function markSessionActive(sessionId: string): void {

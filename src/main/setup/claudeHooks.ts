@@ -67,14 +67,23 @@ export function installHooks(): { success: boolean; error?: string } {
       const existing = hooks[event] as Array<Record<string, unknown>>
 
       const alreadyInstalled = existing.some(
-        h => typeof h.command === 'string' && h.command.includes('claudia-bridge')
+        h =>
+          (typeof h.command === 'string' && h.command.includes('claudia-bridge')) ||
+          (Array.isArray(h.hooks) &&
+            (h.hooks as Array<Record<string, unknown>>).some(
+              hh => typeof hh.command === 'string' && hh.command.includes('claudia-bridge')
+            ))
       )
       if (alreadyInstalled) continue
 
       existing.push({
-        type: 'command',
-        command: scriptPath,
-        timeout: 5
+        hooks: [
+          {
+            type: 'command',
+            command: scriptPath,
+            timeout: 5
+          }
+        ]
       })
     }
 
@@ -95,7 +104,14 @@ export function uninstallHooks(): { success: boolean; error?: string } {
     const hooks = settings.hooks as Record<string, unknown[]>
     for (const event of Object.keys(hooks)) {
       hooks[event] = (hooks[event] as Array<Record<string, unknown>>).filter(
-        h => !(typeof h.command === 'string' && h.command.includes('claudia-bridge'))
+        h =>
+          !(typeof h.command === 'string' && h.command.includes('claudia-bridge')) &&
+          !(
+            Array.isArray(h.hooks) &&
+            (h.hooks as Array<Record<string, unknown>>).some(
+              hh => typeof hh.command === 'string' && hh.command.includes('claudia-bridge')
+            )
+          )
       )
       if (hooks[event].length === 0) delete hooks[event]
     }
@@ -121,7 +137,12 @@ export function areHooksInstalled(): boolean {
     const sessionStartHooks = hooks['SessionStart'] as Array<Record<string, unknown>> | undefined
     if (!sessionStartHooks) return false
     return sessionStartHooks.some(
-      h => typeof h.command === 'string' && h.command.includes('claudia-bridge')
+      h =>
+        (typeof h.command === 'string' && h.command.includes('claudia-bridge')) ||
+        (Array.isArray(h.hooks) &&
+          (h.hooks as Array<Record<string, unknown>>).some(
+            hh => typeof hh.command === 'string' && hh.command.includes('claudia-bridge')
+          ))
     )
   } catch {
     return false
