@@ -304,7 +304,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         console.log(`[git:reviewWithClaude] Using configured claude path: ${claudePath}`)
       }
 
-      const args = ['-p', opts.prompt, '--output-format', 'json', '--max-turns', '2']
+      const args = ['-p', opts.prompt, '--output-format', 'json', '--max-turns', '10']
       console.log(`[git:reviewWithClaude] Spawning: ${claudePath} args=${args.map(a => a.length > 80 ? a.slice(0, 80) + '…' : a).join(' ')}`)
 
       return await new Promise<{ success: boolean; response?: string; error?: string }>((resolve) => {
