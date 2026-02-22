@@ -311,16 +311,25 @@ function renderGroup(
   }
   if (group.kind === 'text') {
     const isQuestionBlock = opts?.isLastText && opts?.isQuestion
+    const isInteractive = group.isInteractiveQuestion
     return (
       <div
         key={idx}
         className={`rounded-2xl rounded-tl-sm px-4 py-3 max-w-full w-full ${
-          isQuestionBlock
-            ? 'bg-amber-950/20 border border-amber-700/30'
-            : 'bg-claude-panel'
+          isInteractive
+            ? 'bg-blue-950/30 border border-blue-600/30'
+            : isQuestionBlock
+              ? 'bg-amber-950/20 border border-amber-700/30'
+              : 'bg-claude-panel'
         }`}
       >
-        {isQuestionBlock && (
+        {isInteractive && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <MessageCircleQuestion size={13} className="text-blue-400" />
+            <span className="text-xs font-medium text-blue-400">Question</span>
+          </div>
+        )}
+        {isQuestionBlock && !isInteractive && (
           <div className="flex items-center gap-1.5 mb-2">
             <MessageCircleQuestion size={13} className="text-amber-400" />
             <span className="text-xs font-medium text-amber-400">Waiting for response</span>

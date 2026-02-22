@@ -121,21 +121,42 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
       break
     }
 
-    case 'Stop':
+    case 'Stop': {
+      if (sessionId) {
+        win.webContents.send('event:sessionActivity', {
+          sessionId,
+          type: 'stopped',
+          timestamp: new Date().toISOString()
+        })
+        // Delay to allow Claude Code to flush JSONL before we read it
+        setTimeout(() => {
+          refreshSession(sessionId, win).then(() => {
+            const session = sessionDb.getById(sessionId)
+            if (session) {
+              win.webContents.send('event:sessionUpdated', session)
+            }
+          })
+        }, 800)
+      }
+      break
+    }
+
     case 'SessionEnd': {
       if (sessionId) {
         markSessionCompleted(sessionId)
         win.webContents.send('event:sessionActivity', {
           sessionId,
-          type: hookEvent === 'Stop' ? 'stopped' : 'session_ended',
+          type: 'session_ended',
           timestamp: new Date().toISOString()
         })
-        refreshSession(sessionId, win).then(() => {
-          const session = sessionDb.getById(sessionId)
-          if (session) {
-            win.webContents.send('event:sessionUpdated', session)
-          }
-        })
+        setTimeout(() => {
+          refreshSession(sessionId, win).then(() => {
+            const session = sessionDb.getById(sessionId)
+            if (session) {
+              win.webContents.send('event:sessionUpdated', session)
+            }
+          })
+        }, 800)
       }
       break
     }
@@ -168,12 +189,15 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
           type: 'user_prompt',
           timestamp: new Date().toISOString()
         })
-        refreshSession(sessionId, win).then(() => {
-          const session = sessionDb.getById(sessionId)
-          if (session) {
-            win.webContents.send('event:sessionUpdated', session)
-          }
-        })
+        // Delay to allow Claude Code to write the user message to JSONL
+        setTimeout(() => {
+          refreshSession(sessionId, win).then(() => {
+            const session = sessionDb.getById(sessionId)
+            if (session) {
+              win.webContents.send('event:sessionUpdated', session)
+            }
+          })
+        }, 800)
       }
       break
     }
@@ -181,6 +205,24 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
     case 'Notification': {
       const message = event.message as string
       win.webContents.send('event:notification', { sessionId, message })
+      // Notification fires when Claude shows interactive questions (AskUserQuestion).
+      // Refresh the session so the question appears in the logs.
+      if (sessionId) {
+        win.webContents.send('event:sessionActivity', {
+          sessionId,
+          type: 'notification',
+          detail: message,
+          timestamp: new Date().toISOString()
+        })
+        setTimeout(() => {
+          refreshSession(sessionId, win).then(() => {
+            const session = sessionDb.getById(sessionId)
+            if (session) {
+              win.webContents.send('event:sessionUpdated', session)
+            }
+          })
+        }, 800)
+      }
       break
     }
 

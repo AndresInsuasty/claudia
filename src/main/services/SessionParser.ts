@@ -74,6 +74,47 @@ export async function readFirstEntry(transcriptPath: string): Promise<import('..
   return null
 }
 
+/**
+ * Transform AskUserQuestion tool_use blocks into readable text blocks.
+ * Claude Code uses AskUserQuestion as a tool to ask the user interactive questions
+ * with selectable options. We convert these into markdown-formatted text so they
+ * display as readable question messages in the logs instead of raw tool calls.
+ */
+function transformAskUserQuestion(content: ClaudeMessage['content']): ClaudeMessage['content'] {
+  return content.map(block => {
+    if (block.type !== 'tool_use') return block
+    const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+    if (toolBlock.name !== 'AskUserQuestion') return block
+
+    const input = toolBlock.input || {}
+    const questions = input.questions as Array<{
+      question?: string
+      header?: string
+      multiSelect?: boolean
+      options?: Array<{ label?: string; description?: string }>
+    }> | undefined
+
+    if (!questions || !Array.isArray(questions)) return block
+
+    const parts: string[] = []
+    for (const q of questions) {
+      if (q.header) parts.push(`**${q.header}**`)
+      if (q.question) parts.push(`${q.question}${q.multiSelect ? ' *(selección múltiple)*' : ''}`)
+      if (q.options && Array.isArray(q.options)) {
+        for (const opt of q.options) {
+          const label = opt.label || ''
+          const desc = opt.description ? ` — ${opt.description}` : ''
+          parts.push(`- ${label}${desc}`)
+        }
+      }
+      parts.push('') // blank line between questions
+    }
+
+    // Prefix with marker so the renderer can detect this was an interactive question
+    return { type: 'text' as const, text: '<!-- interactive-question -->\n' + parts.join('\n').trim() }
+  })
+}
+
 export async function parseTranscriptFile(transcriptPath: string): Promise<{
   messages: ClaudeMessage[]
   costSummary: Partial<SessionCostSummary>
@@ -137,11 +178,14 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
         }
 
         // Handle both array and string content formats
-        const content: ClaudeMessage['content'] = Array.isArray(msg.content)
+        let content: ClaudeMessage['content'] = Array.isArray(msg.content)
           ? (msg.content as ClaudeMessage['content'])
           : typeof msg.content === 'string' && msg.content.trim()
             ? [{ type: 'text', text: msg.content as string }]
             : []
+
+        // Transform AskUserQuestion tool_use into a readable question text block
+        content = transformAskUserQuestion(content)
 
         for (const block of content) {
           if (block.type === 'tool_use') toolCallCount++

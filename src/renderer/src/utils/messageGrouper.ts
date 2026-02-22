@@ -17,7 +17,7 @@ export interface ToolPair {
 export type AssistantContentGroup =
   | { kind: 'thinking'; blocks: ClaudeThinkingContent[] }
   | { kind: 'tools'; pairs: ToolPair[] }
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; isInteractiveQuestion?: boolean }
 
 export interface UserTurn {
   kind: 'user'
@@ -87,13 +87,15 @@ function appendAssistantBlocks(
       }
 
     } else if (block.type === 'text') {
-      const text = (block as { type: 'text'; text: string }).text
+      const rawText = (block as { type: 'text'; text: string }).text
+      const isInteractive = rawText.startsWith('<!-- interactive-question -->')
+      const text = isInteractive ? rawText.replace('<!-- interactive-question -->\n', '') : rawText
       if (text.trim()) {
         const last = groups[groups.length - 1]
-        if (last?.kind === 'text') {
+        if (last?.kind === 'text' && !isInteractive) {
           last.text += '\n' + text
         } else {
-          groups.push({ kind: 'text', text })
+          groups.push({ kind: 'text', text, isInteractiveQuestion: isInteractive || undefined })
         }
       }
     }

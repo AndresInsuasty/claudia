@@ -60,6 +60,8 @@ function activityLabel(type: string, detail?: string): { icon: React.ReactNode; 
       return { icon: <Square size={12} className="text-claude-orange" />, text: 'Claude finished responding' }
     case 'session_ended':
       return { icon: <LogOut size={12} className="text-claude-muted" />, text: 'Session ended' }
+    case 'notification':
+      return { icon: <MessageCircle size={12} className="text-amber-400" />, text: detail || 'Notification' }
     default:
       return { icon: null, text: type }
   }
