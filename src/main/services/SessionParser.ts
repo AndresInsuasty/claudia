@@ -78,6 +78,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   messages: ClaudeMessage[]
   costSummary: Partial<SessionCostSummary>
   cwd?: string
+  gitBranch?: string
 }> {
   const messages: ClaudeMessage[] = []
   let totalInputTokens = 0
@@ -88,6 +89,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   let toolCallCount = 0
   let model = ''
   let cwd: string | undefined
+  let gitBranch: string | undefined
 
   if (!fs.existsSync(transcriptPath)) {
     return { messages, costSummary: {} }
@@ -102,6 +104,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
       const entry: TranscriptEntry = JSON.parse(line)
 
       if (!cwd && entry.cwd) cwd = entry.cwd
+      if (!gitBranch && entry.gitBranch) gitBranch = entry.gitBranch
 
       // Skip non-conversation entries
       if (entry.type === 'progress' || entry.type === 'file-history-snapshot') continue
@@ -167,6 +170,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   return {
     messages,
     cwd,
+    gitBranch,
     costSummary: {
       totalCostUsd,
       totalInputTokens,

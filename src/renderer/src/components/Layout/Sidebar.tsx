@@ -1,15 +1,16 @@
 import React, { useMemo, useState } from 'react'
 import { useSessionStore } from '../../stores/sessionStore'
-import { MessageSquare, FolderOpen, Settings, Plus, Search } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, Plus, Search, ChevronRight } from 'lucide-react'
 import SessionItem from '../Sessions/SessionItem'
 import SettingsPanel from '../Settings/SettingsPanel'
-import type { Session } from '../../../../shared/types'
 
 export default function Sidebar(): React.JSX.Element {
   const { sessions, projects, sidebarView, setSidebarView, selectedSessionId, selectSession } =
     useSessionStore()
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [activeExpanded, setActiveExpanded] = useState(true)
+  const [inactiveExpanded, setInactiveExpanded] = useState(true)
 
   const filtered = useMemo(() => {
     if (!search.trim()) return sessions
@@ -26,6 +27,9 @@ export default function Sidebar(): React.JSX.Element {
       (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
     )
   }, [filtered])
+
+  const activeSessions = useMemo(() => sorted.filter(s => s.status === 'active'), [sorted])
+  const inactiveSessions = useMemo(() => sorted.filter(s => s.status !== 'active'), [sorted])
 
   return (
     <>
@@ -91,19 +95,73 @@ export default function Sidebar(): React.JSX.Element {
 
         <div className="flex-1 overflow-y-auto px-2">
           {sidebarView === 'sessions' ? (
-            <div className="flex flex-col gap-2 py-1">
-              {sorted.map(session => (
-                <SessionItem
-                  key={session.id}
-                  session={session}
-                  isSelected={selectedSessionId === session.id}
-                  onSelect={selectSession}
-                />
-              ))}
-              {sorted.length === 0 && (
+            <div className="flex flex-col gap-1 py-1">
+              {sorted.length === 0 ? (
                 <div className="text-center text-claude-muted text-xs py-8">
                   {search ? 'No sessions found' : 'No sessions yet.\nStart Claude Code in your terminal.'}
                 </div>
+              ) : (
+                <>
+                  {activeSessions.length > 0 && (
+                    <div>
+                      <button
+                        onClick={() => setActiveExpanded(e => !e)}
+                        className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded hover:bg-claude-hover"
+                      >
+                        <ChevronRight
+                          size={12}
+                          className={`text-claude-muted transition-transform ${activeExpanded ? 'rotate-90' : ''}`}
+                        />
+                        <span className="text-xs font-medium text-green-400 flex-1 text-left">Active</span>
+                        <span className="text-xs text-claude-muted bg-claude-hover rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+                          {activeSessions.length}
+                        </span>
+                      </button>
+                      {activeExpanded && (
+                        <div className="flex flex-col gap-1.5 mt-1 ml-1">
+                          {activeSessions.map(session => (
+                            <SessionItem
+                              key={session.id}
+                              session={session}
+                              isSelected={selectedSessionId === session.id}
+                              onSelect={selectSession}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {inactiveSessions.length > 0 && (
+                    <div className={activeSessions.length > 0 ? 'mt-2' : ''}>
+                      <button
+                        onClick={() => setInactiveExpanded(e => !e)}
+                        className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded hover:bg-claude-hover"
+                      >
+                        <ChevronRight
+                          size={12}
+                          className={`text-claude-muted transition-transform ${inactiveExpanded ? 'rotate-90' : ''}`}
+                        />
+                        <span className="text-xs font-medium text-claude-muted flex-1 text-left">Inactive</span>
+                        <span className="text-xs text-claude-muted bg-claude-hover rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+                          {inactiveSessions.length}
+                        </span>
+                      </button>
+                      {inactiveExpanded && (
+                        <div className="flex flex-col gap-1.5 mt-1 ml-1">
+                          {inactiveSessions.map(session => (
+                            <SessionItem
+                              key={session.id}
+                              session={session}
+                              isSelected={selectedSessionId === session.id}
+                              onSelect={selectSession}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           ) : (

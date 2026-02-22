@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { FileText, ChevronRight, Check, X, MessageSquare, Loader, Bot, GitCommit, ChevronDown } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { FileText, ChevronRight, Check, X, MessageSquare, Loader, Bot, GitCommit, ChevronDown, Copy } from 'lucide-react'
 import type { Session } from '../../../../shared/types'
 
 interface DiffFile {
@@ -34,21 +36,74 @@ function DiffLine({ line }: { line: string }): React.JSX.Element {
   return <div className="text-claude-muted font-mono text-xs py-0.5 px-2 whitespace-pre">{line}</div>
 }
 
-function ReviewCard({ text, loading }: { text?: string; loading?: boolean }): React.JSX.Element | null {
+const REVIEW_COLORS: Record<string, { border: string; bg: string; text: string; prose: string }> = {
+  summary: { border: 'border-blue-400/30', bg: 'bg-blue-400/5', text: 'text-blue-400', prose: 'prose-headings:text-blue-400 prose-code:text-blue-400' },
+  syntax:  { border: 'border-green-400/30', bg: 'bg-green-400/5', text: 'text-green-400', prose: 'prose-headings:text-green-400 prose-code:text-green-400' },
+  security:{ border: 'border-purple-400/30', bg: 'bg-purple-400/5', text: 'text-purple-400', prose: 'prose-headings:text-purple-400 prose-code:text-purple-400' },
+  custom:  { border: 'border-cyan-400/30', bg: 'bg-cyan-400/5', text: 'text-cyan-400', prose: 'prose-headings:text-cyan-400 prose-code:text-cyan-400' },
+  file:    { border: 'border-claude-orange/30', bg: 'bg-claude-orange/5', text: 'text-claude-orange', prose: 'prose-headings:text-claude-orange prose-code:text-claude-orange' }
+}
+
+const REVIEW_TITLES: Record<string, string> = {
+  summary: 'General Summary',
+  syntax: 'Syntax Review',
+  security: 'Security Review',
+  custom: 'Custom Review',
+  file: 'File Review'
+}
+
+function ReviewCard({ text, loading, variant = 'file', title, collapsed, onToggle }: {
+  text?: string; loading?: boolean; variant?: string; title?: string
+  collapsed?: boolean; onToggle?: () => void
+}): React.JSX.Element | null {
   if (!text && !loading) return null
+  const colors = REVIEW_COLORS[variant] ?? REVIEW_COLORS.file
+  const label = title ?? REVIEW_TITLES[variant] ?? 'Review'
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    if (!text) return
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
   return (
-    <div className="mx-3 mb-3 rounded-lg border border-claude-orange/30 bg-claude-orange/5 p-3">
-      <div className="flex items-center gap-1.5 mb-2">
-        <Bot size={13} className="text-claude-orange" />
-        <span className="text-xs font-medium text-claude-orange">Claude Review</span>
+    <div className={`mx-3 mb-2 rounded-lg border ${colors.border} ${colors.bg} p-3`}>
+      <div className="flex items-center gap-1.5 cursor-pointer select-none" onClick={onToggle}>
+        <ChevronDown size={13} className={`${colors.text} transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+        <Bot size={13} className={colors.text} />
+        <span className={`text-xs font-medium ${colors.text} flex-1`}>{label}</span>
+        {!loading && text && (
+          <button
+            onClick={e => { e.stopPropagation(); handleCopy() }}
+            className="p-0.5 rounded hover:bg-white/10 transition-colors"
+            title="Copy review"
+          >
+            {copied
+              ? <Check size={11} className="text-green-400" />
+              : <Copy size={11} className="text-claude-muted hover:text-claude-text" />}
+          </button>
+        )}
       </div>
-      {loading ? (
-        <div className="flex items-center gap-2 text-xs text-claude-muted">
-          <Loader size={12} className="animate-spin" />
-          Analyzing…
+      {!collapsed && (
+        <div className="mt-2">
+          {loading ? (
+            <div className="flex items-center gap-2 text-xs text-claude-muted">
+              <Loader size={12} className="animate-spin" />
+              Analyzing…
+            </div>
+          ) : (
+            <div className={`text-xs text-claude-text leading-relaxed prose prose-invert prose-xs max-w-none
+              prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5
+              ${colors.prose} prose-headings:text-xs prose-headings:mt-2 prose-headings:mb-1
+              prose-strong:text-claude-text prose-code:text-[11px]
+              prose-code:bg-claude-hover prose-code:px-1 prose-code:py-0.5 prose-code:rounded
+              prose-pre:bg-[#0d0d0d] prose-pre:rounded-md prose-pre:p-2 prose-pre:my-1`}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{text ?? ''}</ReactMarkdown>
+            </div>
+          )}
         </div>
-      ) : (
-        <p className="text-xs text-claude-text leading-relaxed whitespace-pre-wrap">{text}</p>
       )}
     </div>
   )
@@ -58,8 +113,8 @@ export default function CodeTab({ session }: Props): React.JSX.Element {
   const [files, setFiles] = useState<DiffFile[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [generalReview, setGeneralReview] = useState<string | undefined>()
-  const [generalReviewLoading, setGeneralReviewLoading] = useState(false)
+  const [generalReviews, setGeneralReviews] = useState<Partial<Record<ReviewType, string>>>({})
+  const [generalReviewLoading, setGeneralReviewLoading] = useState<Partial<Record<ReviewType, boolean>>>({})
   const [commitLoading, setCommitLoading] = useState(false)
   const [commitMsg, setCommitMsg] = useState('')
   const [showReviewMenu, setShowReviewMenu] = useState(false)
@@ -67,6 +122,7 @@ export default function CodeTab({ session }: Props): React.JSX.Element {
   const [showCustomInput, setShowCustomInput] = useState(false)
   const [requestChangeText, setRequestChangeText] = useState<Record<string, string>>({})
   const [requestChangeSending, setRequestChangeSending] = useState<Record<string, boolean>>({})
+  const [collapsedReviews, setCollapsedReviews] = useState<Set<string>>(new Set())
 
   const loadDiff = useCallback(async () => {
     setLoading(true)
@@ -79,7 +135,28 @@ export default function CodeTab({ session }: Props): React.JSX.Element {
     }
   }, [session.projectPath])
 
-  useEffect(() => { loadDiff() }, [loadDiff])
+  const loadReviews = useCallback(async () => {
+    try {
+      const saved = await window.api.reviews.getBySession(session.id)
+      const generals: Partial<Record<ReviewType, string>> = {}
+      const fileReviews: Record<string, string> = {}
+      for (const r of saved) {
+        if (r.scope === 'general') {
+          generals[r.reviewType as ReviewType] = r.content
+        } else if (r.filePath) {
+          fileReviews[r.filePath] = r.content
+        }
+      }
+      if (Object.keys(generals).length > 0) setGeneralReviews(generals)
+      if (Object.keys(fileReviews).length > 0) {
+        setFiles(prev => prev.map(f => fileReviews[f.path] ? { ...f, review: fileReviews[f.path] } : f))
+      }
+    } catch (err) {
+      console.warn('[CodeTab] loadReviews error:', err)
+    }
+  }, [session.id])
+
+  useEffect(() => { loadDiff().then(() => loadReviews()) }, [loadDiff, loadReviews])
 
   const loadFileDiff = useCallback(async (filePath: string) => {
     setFiles(prev => prev.map(f => f.path === filePath ? { ...f, diff: f.diff ?? 'loading' } : f))
@@ -95,67 +172,93 @@ export default function CodeTab({ session }: Props): React.JSX.Element {
     }
   }
 
-  const handleAccept = (filePath: string) => {
-    setFiles(prev => prev.map(f => f.path === filePath ? { ...f, status: 'accepted' } : f))
+  const handleAccept = async (filePath: string) => {
+    await window.api.git.stageFile(session.projectPath, filePath)
+    await window.api.reviews.deleteByFile(session.id, filePath)
+    setFiles(prev => {
+      const next = prev.filter(f => f.path !== filePath)
+      if (selectedFile === filePath) {
+        setSelectedFile(next.length > 0 ? next[0].path : null)
+      }
+      return next
+    })
   }
 
   const handleReject = async (filePath: string) => {
     await window.api.git.revertFile(session.projectPath, filePath)
-    setFiles(prev => prev.map(f => f.path === filePath ? { ...f, status: 'rejected' } : f))
+    await window.api.reviews.deleteByFile(session.id, filePath)
+    setFiles(prev => {
+      const next = prev.filter(f => f.path !== filePath)
+      if (selectedFile === filePath) {
+        setSelectedFile(next.length > 0 ? next[0].path : null)
+      }
+      return next
+    })
   }
 
   const handleReviewFile = async (filePath: string, reviewType: ReviewType) => {
     const file = files.find(f => f.path === filePath)
     if (!file) return
 
-    const diff = file.diff || await window.api.git.fileDiff(session.projectPath, filePath)
     const prompts: Record<ReviewType, string> = {
-      summary: `Summarize the changes in this file:\n\n${diff}`,
-      syntax: `Review this file's changes for syntax issues and code quality problems:\n\n${diff}`,
-      security: `Review this file's changes for security vulnerabilities:\n\n${diff}`,
-      custom: customPrompt ? `${customPrompt}\n\n${diff}` : `Review these changes:\n\n${diff}`
+      summary: `Run \`git diff -- ${filePath}\` and provide a concise summary of the unstaged changes in this file. Highlight anything unusual or risky.`,
+      syntax: `Run \`git diff -- ${filePath}\` and review the unstaged changes for syntax issues and code quality problems. Be concise.`,
+      security: `Run \`git diff -- ${filePath}\` and review the unstaged changes for security vulnerabilities. Be concise.`,
+      custom: customPrompt ? `Run \`git diff -- ${filePath}\` and ${customPrompt}` : `Run \`git diff -- ${filePath}\` and review the unstaged changes. Be concise.`
     }
 
+    console.log(`[CodeTab] handleReviewFile file=${filePath} type=${reviewType}`)
+    console.log(`[CodeTab] handleReviewFile prompt=${prompts[reviewType].slice(0, 120)}…`)
     setFiles(prev => prev.map(f => f.path === filePath ? { ...f, reviewLoading: true } : f))
     const result = await window.api.git.reviewWithClaude({
-      sessionId: session.id,
       projectPath: session.projectPath,
       prompt: prompts[reviewType]
     })
+    console.log(`[CodeTab] handleReviewFile result:`, result)
+    const content = result.success ? result.response : result.error
     setFiles(prev => prev.map(f => f.path === filePath ? {
-      ...f, reviewLoading: false, review: result.success ? result.response : result.error
+      ...f, reviewLoading: false, review: content
     } : f))
+    if (content) {
+      await window.api.reviews.save(session.id, reviewType, 'file', filePath, content)
+    }
   }
 
   const handleGeneralReview = async (reviewType: ReviewType) => {
     setShowReviewMenu(false)
-    const rawDiff = (await window.api.git.lastCommitDiff(session.projectPath)).rawDiff
     const prompts: Record<ReviewType, string> = {
-      summary: `Give a general summary of all these changes:\n\n${rawDiff}`,
-      syntax: `Review all these changes for syntax issues:\n\n${rawDiff}`,
-      security: `Review all these changes for security vulnerabilities:\n\n${rawDiff}`,
-      custom: `${customPrompt}\n\n${rawDiff}`
+      summary: `Run \`git diff\` and provide a concise general summary of all unstaged changes. Highlight anything unusual or risky.`,
+      syntax: `Run \`git diff\` and review all unstaged changes for syntax issues and code quality problems. Be concise.`,
+      security: `Run \`git diff\` and review all unstaged changes for security vulnerabilities. Be concise.`,
+      custom: customPrompt ? `Run \`git diff\` and ${customPrompt}` : `Run \`git diff\` and review all unstaged changes. Be concise.`
     }
-    setGeneralReviewLoading(true)
+    console.log(`[CodeTab] handleGeneralReview type=${reviewType}`)
+    console.log(`[CodeTab] handleGeneralReview prompt=${prompts[reviewType].slice(0, 120)}…`)
+    setGeneralReviewLoading(prev => ({ ...prev, [reviewType]: true }))
     const result = await window.api.git.reviewWithClaude({
-      sessionId: session.id,
       projectPath: session.projectPath,
       prompt: prompts[reviewType]
     })
-    setGeneralReview(result.success ? result.response : result.error)
-    setGeneralReviewLoading(false)
+    console.log(`[CodeTab] handleGeneralReview result:`, result)
+    const content = result.success ? result.response : result.error
+    setGeneralReviews(prev => ({ ...prev, [reviewType]: content }))
+    setGeneralReviewLoading(prev => ({ ...prev, [reviewType]: false }))
+    if (content) {
+      await window.api.reviews.save(session.id, reviewType, 'general', null, content)
+    }
   }
 
   const handleApproveAll = async () => {
     setCommitLoading(true)
     const accepted = files.filter(f => f.status === 'accepted').map(f => f.path)
     const fileList = accepted.length > 0 ? accepted : files.filter(f => f.status !== 'rejected').map(f => f.path)
-    const prompt = `The user has reviewed and approved the following files. Please git add them and create a descriptive commit:\n${fileList.join('\n')}`
+    console.log(`[CodeTab] handleApproveAll files=${fileList.join(', ')}`)
+    const prompt = `The following files have been staged (git add). Create a descriptive commit message and run git commit for them:\n${fileList.join('\n')}`
     const result = await window.api.git.reviewWithClaude({
-      sessionId: session.id,
       projectPath: session.projectPath,
       prompt
     })
+    console.log(`[CodeTab] handleApproveAll result:`, result)
     setCommitMsg(result.success ? (result.response ?? 'Committed ✓') : (result.error ?? 'Error'))
     setCommitLoading(false)
     setTimeout(() => loadDiff(), 2000)
@@ -166,12 +269,19 @@ export default function CodeTab({ session }: Props): React.JSX.Element {
     if (!text?.trim()) return
     setRequestChangeSending(prev => ({ ...prev, [filePath]: true }))
     await window.api.git.reviewWithClaude({
-      sessionId: session.id,
       projectPath: session.projectPath,
-      prompt: `Regarding the changes in ${filePath}: ${text}`
+      prompt: `Regarding the file ${filePath}: ${text}`
     })
     setRequestChangeText(prev => ({ ...prev, [filePath]: '' }))
     setRequestChangeSending(prev => ({ ...prev, [filePath]: false }))
+  }
+
+  const toggleCollapse = (key: string) => {
+    setCollapsedReviews(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
   }
 
   const selectedFileData = files.find(f => f.path === selectedFile)
@@ -332,13 +442,20 @@ export default function CodeTab({ session }: Props): React.JSX.Element {
               </div>
             </div>
 
-            {/* General review banner */}
-            {(generalReview || generalReviewLoading) && (
-              <ReviewCard text={generalReview} loading={generalReviewLoading} />
-            )}
+            {/* Scrollable reviews area */}
+            <div className="max-h-[40vh] overflow-y-auto shrink-0 py-1 border-b border-claude-border">
+              {/* Stacked general reviews (summary, syntax, security, custom) */}
+              {(['summary', 'syntax', 'security', 'custom'] as ReviewType[]).map(rt => (
+                (generalReviews[rt] || generalReviewLoading[rt]) ? (
+                  <ReviewCard key={rt} variant={rt} text={generalReviews[rt]} loading={generalReviewLoading[rt]}
+                    collapsed={collapsedReviews.has(rt)} onToggle={() => toggleCollapse(rt)} />
+                ) : null
+              ))}
 
-            {/* Per-file review */}
-            <ReviewCard text={selectedFileData.review} loading={selectedFileData.reviewLoading} />
+              {/* Per-file review */}
+              <ReviewCard variant="file" text={selectedFileData.review} loading={selectedFileData.reviewLoading}
+                collapsed={collapsedReviews.has('file')} onToggle={() => toggleCollapse('file')} />
+            </div>
 
             {/* Request change */}
             <div className="px-3 py-2 border-b border-claude-border bg-claude-panel/50 shrink-0">

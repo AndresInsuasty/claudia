@@ -70,8 +70,8 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
   const currentTab = isActive ? activeTab : (activeTab === 'code' ? 'logs' : activeTab)
 
   const handleResume = useCallback(async () => {
-    await resumeSession(session.id, session.projectPath)
-  }, [session.id, session.projectPath, resumeSession])
+    await resumeSession(session.id, session.projectPath, session.branch)
+  }, [session.id, session.projectPath, session.branch, resumeSession])
 
   const handleRollback = useCallback(async () => {
     await window.api.git.stash(session.projectPath)
@@ -82,14 +82,12 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
       {/* Session header */}
       <ChatHeader session={session} />
 
-      {/* Active session controls */}
-      {isActive && (
-        <SessionControls
-          session={session}
-          onResume={handleResume}
-          onRollback={handleRollback}
-        />
-      )}
+      {/* Session controls */}
+      <SessionControls
+        session={session}
+        onResume={handleResume}
+        onRollback={handleRollback}
+      />
 
       {/* Tab bar */}
       <div className="flex items-center border-b border-claude-border bg-claude-panel shrink-0 px-2">

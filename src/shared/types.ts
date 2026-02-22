@@ -23,6 +23,7 @@ export interface Session {
   messageCount: number
   tags: string[]
   title?: string
+  branch?: string
   source?: 'app' | 'external'
 }
 

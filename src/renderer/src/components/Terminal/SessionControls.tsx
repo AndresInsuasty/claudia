@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { RotateCcw, Play, Loader } from 'lucide-react'
+import { RotateCcw, Play, Loader, Lightbulb } from 'lucide-react'
 import type { Session } from '../../../../shared/types'
 
 interface Props {
@@ -42,15 +42,25 @@ export default function SessionControls({ session, onResume, onRollback }: Props
         Rollback
       </button>
 
-      <button
-        onClick={handleResume}
-        disabled={resuming}
-        title={`claude --resume ${session.id}`}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-claude-orange text-white hover:opacity-90 transition-opacity disabled:opacity-50"
-      >
-        {resuming ? <Loader size={13} className="animate-spin" /> : <Play size={13} />}
-        Resume
-      </button>
+      {session.status === 'active' ? (
+        <span
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-green-600/20 text-green-400 cursor-default"
+          title="Session is currently active"
+        >
+          <Lightbulb size={13} />
+          Active
+        </span>
+      ) : (
+        <button
+          onClick={handleResume}
+          disabled={resuming}
+          title={`claude --resume ${session.id}`}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-claude-orange text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          {resuming ? <Loader size={13} className="animate-spin" /> : <Play size={13} />}
+          Resume
+        </button>
+      )}
 
       {rollbackMsg && (
         <span className="text-xs text-green-400 ml-2">{rollbackMsg}</span>

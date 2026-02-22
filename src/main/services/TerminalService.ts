@@ -110,13 +110,13 @@ export function isTerminalRunning(sessionId: string): boolean {
 
 // ─── Git helpers ─────────────────────────────────────────────────────────────
 
-export async function getLastCommitDiff(projectPath: string): Promise<{
+export async function getUnstagedDiff(projectPath: string): Promise<{
   files: Array<{ path: string; additions: number; deletions: number }>
   rawDiff: string
 }> {
   try {
-    const { stdout: stat } = await execAsync('git show HEAD --stat --format=', { cwd: projectPath })
-    const { stdout: diff } = await execAsync('git show HEAD', { cwd: projectPath })
+    const { stdout: stat } = await execAsync('git diff --stat', { cwd: projectPath })
+    const { stdout: diff } = await execAsync('git diff', { cwd: projectPath })
 
     const files: Array<{ path: string; additions: number; deletions: number }> = []
     for (const line of stat.trim().split('\n')) {
@@ -140,7 +140,7 @@ export async function getLastCommitDiff(projectPath: string): Promise<{
 
 export async function getFileDiff(projectPath: string, filePath: string): Promise<string> {
   try {
-    const { stdout } = await execAsync(`git show HEAD -- "${filePath}"`, { cwd: projectPath })
+    const { stdout } = await execAsync(`git diff -- "${filePath}"`, { cwd: projectPath })
     return stdout
   } catch {
     return ''
@@ -149,7 +149,16 @@ export async function getFileDiff(projectPath: string, filePath: string): Promis
 
 export async function revertFile(projectPath: string, filePath: string): Promise<{ success: boolean; error?: string }> {
   try {
-    await execAsync(`git checkout HEAD~1 -- "${filePath}"`, { cwd: projectPath })
+    await execAsync(`git checkout -- "${filePath}"`, { cwd: projectPath })
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: String(err) }
+  }
+}
+
+export async function stageFile(projectPath: string, filePath: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await execAsync(`git add "${filePath}"`, { cwd: projectPath })
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

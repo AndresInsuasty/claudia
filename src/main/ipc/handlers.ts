@@ -1,22 +1,42 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
-import { sessionDb, messageDb, projectDb, settingsDb } from '../services/Database'
+import { sessionDb, messageDb, projectDb, settingsDb, reviewDb } from '../services/Database'
 import { areHooksInstalled, installHooks, uninstallHooks } from '../setup/claudeHooks'
 import { isHooksServerRunning } from '../services/HooksServer'
 import {
-  createTerminal, writeTerminal, resizeTerminal, killTerminal, isTerminalRunning,
-  getLastCommitDiff, getFileDiff, revertFile, stashChanges, getBranches, findGitRepos
+  createTerminal, writeTerminal, resizeTerminal, killTerminal, killAllTerminals, isTerminalRunning,
+  getUnstagedDiff, getFileDiff, revertFile, stageFile, stashChanges, getBranches, findGitRepos
 } from '../services/TerminalService'
-import { spawn, ChildProcess, exec } from 'child_process'
+import { spawn, ChildProcess, exec, execFile as execFileCb } from 'child_process'
 import { promisify } from 'util'
 import { basename } from 'path'
 import which from 'which'
 import { registerPendingLaunch } from '../services/FileWatcher'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFileCb)
 
 const runningProcesses = new Map<number, ChildProcess>()
 
 export function registerIpcHandlers(win: BrowserWindow): void {
+  ipcMain.handle('sessions:resetActive', () => {
+    console.log('[IPC] sessions:resetActive — marking stale active sessions as completed and killing orphan terminals')
+    sessionDb.resetActiveSessions()
+    killAllTerminals()
+  })
+
+  // Reviews
+  ipcMain.handle('reviews:save', (_e, sessionId: string, reviewType: string, scope: string, filePath: string | null, content: string) => {
+    reviewDb.upsert(sessionId, reviewType, scope, filePath, content)
+  })
+
+  ipcMain.handle('reviews:getBySession', (_e, sessionId: string) => {
+    return reviewDb.getBySession(sessionId)
+  })
+
+  ipcMain.handle('reviews:deleteByFile', (_e, sessionId: string, filePath: string) => {
+    reviewDb.deleteByFile(sessionId, filePath)
+  })
+
   ipcMain.handle('sessions:list', () => sessionDb.list())
 
   ipcMain.handle('sessions:get', (_e, id: string) => sessionDb.getById(id))
@@ -175,7 +195,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       console.log(`[sessions:launchNew] Registering pending launch id=${launchId} project=${opts.projectPath} name=${opts.name}`)
 
       // Register pending launch so HooksServer can link the terminal when SessionStart fires.
-      registerPendingLaunch(opts.projectPath, launchId, opts.name)
+      registerPendingLaunch(opts.projectPath, launchId, opts.name, opts.branch)
 
       // Insert provisional session in DB immediately so it appears in the sidebar.
       // transcriptPath is empty — will be filled when FileWatcher picks up the JSONL.
@@ -195,6 +215,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         messageCount: 0,
         title: opts.name,
         tags: [],
+        branch: opts.branch || undefined,
         source: 'app' as const
       }
       sessionDb.upsert(provisionalSession)
@@ -233,7 +254,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   // ─── Git handlers ────────────────────────────────────────────────────────
   ipcMain.handle('git:lastCommitDiff', (_e, projectPath: string) => {
-    return getLastCommitDiff(projectPath)
+    return getUnstagedDiff(projectPath)
   })
 
   ipcMain.handle('git:fileDiff', (_e, projectPath: string, filePath: string) => {
@@ -242,6 +263,10 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('git:revertFile', (_e, projectPath: string, filePath: string) => {
     return revertFile(projectPath, filePath)
+  })
+
+  ipcMain.handle('git:stageFile', (_e, projectPath: string, filePath: string) => {
+    return stageFile(projectPath, filePath)
   })
 
   ipcMain.handle('git:stash', (_e, projectPath: string) => {
@@ -265,26 +290,75 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   ipcMain.handle('git:reviewWithClaude', async (_e, opts: {
-    sessionId: string
     projectPath: string
     prompt: string
   }) => {
+    console.log(`[git:reviewWithClaude] START cwd=${opts.projectPath} prompt=${opts.prompt.slice(0, 120)}…`)
     try {
       const settings = settingsDb.get()
       let claudePath = settings.claudeExecutablePath
-      if (!claudePath) claudePath = await which('claude')
-
-      const { stdout, stderr } = await execAsync(
-        `"${claudePath}" --resume "${opts.sessionId}" -p ${JSON.stringify(opts.prompt)} --output-format json`,
-        { cwd: opts.projectPath, timeout: 120_000 }
-      )
-      try {
-        const parsed = JSON.parse(stdout)
-        return { success: true, response: parsed.result ?? parsed.content ?? stdout }
-      } catch {
-        return { success: true, response: stdout || stderr }
+      if (!claudePath) {
+        claudePath = await which('claude')
+        console.log(`[git:reviewWithClaude] Resolved claude path via which: ${claudePath}`)
+      } else {
+        console.log(`[git:reviewWithClaude] Using configured claude path: ${claudePath}`)
       }
+
+      const args = ['-p', opts.prompt, '--output-format', 'json', '--max-turns', '2']
+      console.log(`[git:reviewWithClaude] Spawning: ${claudePath} args=${args.map(a => a.length > 80 ? a.slice(0, 80) + '…' : a).join(' ')}`)
+
+      return await new Promise<{ success: boolean; response?: string; error?: string }>((resolve) => {
+        const child = spawn(claudePath, args, {
+          cwd: opts.projectPath,
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe']
+        })
+
+        let stdout = ''
+        let stderr = ''
+        const timer = setTimeout(() => {
+          console.warn(`[git:reviewWithClaude] TIMEOUT (180s) — killing process`)
+          child.kill('SIGTERM')
+        }, 180_000)
+
+        child.stdout?.on('data', (data: Buffer) => {
+          stdout += data.toString()
+          console.log(`[git:reviewWithClaude] stdout chunk +${data.length} bytes (total: ${stdout.length})`)
+        })
+
+        child.stderr?.on('data', (data: Buffer) => {
+          stderr += data.toString()
+        })
+
+        child.on('error', (err) => {
+          clearTimeout(timer)
+          console.error(`[git:reviewWithClaude] spawn error:`, err)
+          resolve({ success: false, error: String(err) })
+        })
+
+        child.on('close', (code) => {
+          clearTimeout(timer)
+          console.log(`[git:reviewWithClaude] process exited code=${code} stdout=${stdout.length}b stderr=${stderr.length}b`)
+          if (stderr) console.warn(`[git:reviewWithClaude] stderr: ${stderr.slice(0, 300)}`)
+
+          if (code !== 0 && !stdout) {
+            resolve({ success: false, error: `claude exited with code ${code}: ${stderr.slice(0, 500)}` })
+            return
+          }
+
+          try {
+            const parsed = JSON.parse(stdout)
+            const response = parsed.result ?? parsed.content ?? stdout
+            console.log(`[git:reviewWithClaude] SUCCESS parsed JSON, response length=${String(response).length}`)
+            resolve({ success: true, response })
+          } catch {
+            console.log(`[git:reviewWithClaude] returning raw stdout`)
+            resolve({ success: true, response: stdout || stderr || '(no output)' })
+          }
+        })
+      })
     } catch (err) {
+      console.error(`[git:reviewWithClaude] ERROR:`, err)
       return { success: false, error: String(err) }
     }
   })

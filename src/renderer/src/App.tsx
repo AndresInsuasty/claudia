@@ -14,11 +14,12 @@ export default function App(): React.JSX.Element {
     addMessage,
     selectSession,
     linkTerminal,
-    replaceSession
+    replaceSession,
+    invalidateMessages
   } = useSessionStore()
 
   useEffect(() => {
-    loadSessions()
+    window.api.sessions.resetActive().then(() => loadSessions())
     loadProjects()
     loadSettings()
 
@@ -27,7 +28,14 @@ export default function App(): React.JSX.Element {
     })
 
     const offSessionUpdated = window.api.on('event:sessionUpdated', (session: unknown) => {
-      updateSession(session as Session)
+      const sess = session as Session
+      updateSession(sess)
+
+      // If session has messages but cache is empty, invalidate and reload
+      const { selectedSessionId, messages } = useSessionStore.getState()
+      if (sess.id === selectedSessionId && sess.messageCount > 0 && !messages[sess.id]?.length) {
+        invalidateMessages(sess.id)
+      }
     })
 
     const offSessionStarted = window.api.on('event:sessionStarted', (session: unknown) => {

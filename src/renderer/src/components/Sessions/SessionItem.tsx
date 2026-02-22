@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Check, Clock, Copy, DollarSign, FolderOpen, MessageSquare, Zap } from 'lucide-react'
+import { Check, Clock, Copy, DollarSign, FolderOpen, GitBranch, MessageSquare, Zap } from 'lucide-react'
 import type { Session } from '../../../../shared/types'
 
 interface Props {
@@ -118,6 +118,15 @@ export default function SessionItem({ session, isSelected, onSelect }: Props): R
         <span className="text-xs text-claude-muted truncate" title={session.projectPath}>
           {session.projectName}
         </span>
+        {session.branch && (
+          <>
+            <span className="text-claude-border text-xs">/</span>
+            <GitBranch size={10} className="text-claude-muted shrink-0" />
+            <span className="text-xs text-claude-muted truncate" title={session.branch}>
+              {session.branch}
+            </span>
+          </>
+        )}
       </div>
 
       {session.tags.length > 0 && (

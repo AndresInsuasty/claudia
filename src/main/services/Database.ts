@@ -66,10 +66,29 @@ function initSchema(db: Database.Database): void {
       name TEXT NOT NULL,
       last_active_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      review_type TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      file_path TEXT,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(session_id, review_type, scope, file_path)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reviews_session ON reviews(session_id);
   `)
 
   try {
     db.exec(`ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'app'`)
+  } catch {
+    // Column already exists — safe to ignore
+  }
+
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN branch TEXT`)
   } catch {
     // Column already exists — safe to ignore
   }
@@ -90,11 +109,11 @@ export const sessionDb = {
       INSERT INTO sessions (
         id, project_path, project_name, transcript_path, started_at, ended_at,
         model, status, total_cost_usd, total_input_tokens, total_output_tokens,
-        message_count, title, tags, source
+        message_count, title, tags, source, branch
       ) VALUES (
         @id, @projectPath, @projectName, @transcriptPath, @startedAt, @endedAt,
         @model, @status, @totalCostUsd, @totalInputTokens, @totalOutputTokens,
-        @messageCount, @title, @tags, @source
+        @messageCount, @title, @tags, @source, @branch
       )
       ON CONFLICT(id) DO UPDATE SET
         ended_at = @endedAt,
@@ -104,6 +123,7 @@ export const sessionDb = {
         total_output_tokens = @totalOutputTokens,
         message_count = @messageCount,
         title = COALESCE(@title, title),
+        branch = COALESCE(@branch, branch),
         tags = @tags
     `).run({
       id: session.id,
@@ -120,7 +140,8 @@ export const sessionDb = {
       messageCount: session.messageCount,
       title: session.title ?? null,
       tags: JSON.stringify(session.tags),
-      source: session.source ?? 'app'
+      source: session.source ?? 'app',
+      branch: session.branch ?? null
     })
 
     db.prepare(`
@@ -173,6 +194,11 @@ export const sessionDb = {
 
   incrementMessageCount(id: string): void {
     getDb().prepare('UPDATE sessions SET message_count = message_count + 1 WHERE id = ?').run(id)
+  },
+
+  resetActiveSessions(): void {
+    const now = new Date().toISOString()
+    getDb().prepare("UPDATE sessions SET status = 'completed', ended_at = ? WHERE status = 'active'").run(now)
   },
 
   updateProjectPath(id: string, projectPath: string, projectName: string): void {
@@ -278,7 +304,42 @@ function rowToSession(row: Record<string, unknown>): Session {
     messageCount: row.message_count as number,
     title: (row.title as string | null) ?? undefined,
     tags: (() => { try { return JSON.parse((row.tags as string) || '[]') } catch { return [] } })(),
+    branch: (row.branch as string | null) ?? undefined,
     source: (row.source as Session['source']) ?? 'app'
+  }
+}
+
+export const reviewDb = {
+  upsert(sessionId: string, reviewType: string, scope: string, filePath: string | null, content: string): void {
+    getDb().prepare(`
+      INSERT INTO reviews (session_id, review_type, scope, file_path, content)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, review_type, scope, file_path) DO UPDATE SET
+        content = excluded.content,
+        created_at = datetime('now')
+    `).run(sessionId, reviewType, scope, filePath, content)
+  },
+
+  getBySession(sessionId: string): Array<{ reviewType: string; scope: string; filePath: string | null; content: string }> {
+    const rows = getDb().prepare(
+      'SELECT review_type, scope, file_path, content FROM reviews WHERE session_id = ? ORDER BY created_at ASC'
+    ).all(sessionId) as Record<string, unknown>[]
+    return rows.map(r => ({
+      reviewType: r.review_type as string,
+      scope: r.scope as string,
+      filePath: (r.file_path as string | null) ?? null,
+      content: r.content as string
+    }))
+  },
+
+  deleteByFile(sessionId: string, filePath: string): void {
+    getDb().prepare(
+      'DELETE FROM reviews WHERE session_id = ? AND file_path = ?'
+    ).run(sessionId, filePath)
+  },
+
+  deleteBySession(sessionId: string): void {
+    getDb().prepare('DELETE FROM reviews WHERE session_id = ?').run(sessionId)
   }
 }
 

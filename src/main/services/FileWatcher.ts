@@ -28,12 +28,13 @@ let watcher: ReturnType<typeof chokidar.watch> | null = null
 interface PendingLaunch {
   launchId: string
   name: string
+  branch?: string
 }
 
 const pendingLaunches = new Map<string, PendingLaunch>()
 
-export function registerPendingLaunch(projectPath: string, launchId: string, name: string): void {
-  pendingLaunches.set(projectPath, { launchId, name })
+export function registerPendingLaunch(projectPath: string, launchId: string, name: string, branch?: string): void {
+  pendingLaunches.set(projectPath, { launchId, name, branch })
 }
 
 export function consumePendingLaunch(projectPath: string): PendingLaunch | undefined {
@@ -159,19 +160,28 @@ async function processNewTranscript(
   transcriptPath: string,
   win: BrowserWindow
 ): Promise<void> {
-  const { messages, costSummary, cwd } = await parseTranscriptFile(transcriptPath)
+  const { messages, costSummary, cwd, gitBranch } = await parseTranscriptFile(transcriptPath)
   const resolvedProjectPath = cwd || projectPath
   const projectName = deriveProjectName(resolvedProjectPath)
 
-  // Check if this transcript was launched from the app (peek only — HooksServer will consume)
-  const pending = peekPendingLaunch(resolvedProjectPath) || peekPendingLaunch(projectPath)
-  // title=null means COALESCE in DB will keep existing title (user-provided name)
-  const title = pending ? pending.name : deriveSessionTitle(messages)
-
-  const stat = fs.existsSync(transcriptPath) ? fs.statSync(transcriptPath) : null
-
   // Check if session already exists (created by HooksServer from SessionStart hook)
   const alreadyExists = !!sessionDb.getById(sessionId)
+
+  // Check if this transcript was launched from the app (peek only — HooksServer will consume)
+  const pending = peekPendingLaunch(resolvedProjectPath) || peekPendingLaunch(projectPath)
+
+  // ONLY process sessions that were launched from the app or already exist in the DB
+  // This prevents external Claude Code sessions (started from terminal) from appearing in the app
+  if (!pending && !alreadyExists) {
+    console.log(`[FileWatcher] Ignoring external session: ${sessionId} (not launched from app)`)
+    return
+  }
+
+  // If session already exists, use null to preserve existing title via COALESCE
+  // Otherwise derive title from pending name or first message
+  const title = pending ? pending.name : (alreadyExists ? null : deriveSessionTitle(messages))
+
+  const stat = fs.existsSync(transcriptPath) ? fs.statSync(transcriptPath) : null
 
   const session: Session = {
     id: sessionId,
@@ -187,13 +197,19 @@ async function processNewTranscript(
     messageCount: messages.length,
     title,
     tags: [],
+    branch: pending?.branch || gitBranch || undefined,
     source: 'app'
   }
 
   sessionDb.upsert(session)
 
   for (const msg of messages) {
-    messageDb.insert({ ...msg, sessionId })
+    const fullMsg: ClaudeMessage = { ...msg, sessionId }
+    messageDb.insert(fullMsg)
+    // Send event for initial messages if session already exists (may be selected in UI)
+    if (alreadyExists) {
+      win.webContents.send('event:messageAdded', { sessionId, message: fullMsg })
+    }
   }
 
   watchedFiles.set(transcriptPath, {

@@ -20,13 +20,14 @@ interface SessionStore {
   updateSession: (session: Session) => void
   addSession: (session: Session) => void
   addMessage: (sessionId: string, message: ClaudeMessage) => void
+  invalidateMessages: (sessionId: string) => void
   updateSettings: (partial: Partial<AppSettings>) => Promise<void>
   setSidebarView: (view: 'sessions' | 'projects') => void
   deleteSession: (id: string) => Promise<void>
   updateSessionTitle: (id: string, title: string) => Promise<void>
   openTerminalForSession: (sessionId: string, projectPath: string) => Promise<void>
   launchSessionTerminal: (launchId: string, projectPath: string) => Promise<void>
-  resumeSession: (sessionId: string, projectPath: string) => Promise<void>
+  resumeSession: (sessionId: string, projectPath: string, branch?: string) => Promise<void>
   closeTerminal: () => Promise<void>
   toggleTerminalVisible: () => void
   linkTerminal: (launchId: string, sessionId: string) => void
@@ -114,6 +115,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }))
   },
 
+  invalidateMessages: (sessionId) => {
+    set(state => {
+      const newMessages = { ...state.messages }
+      delete newMessages[sessionId]
+      return { messages: newMessages }
+    })
+    // Reload messages immediately
+    get().loadMessages(sessionId)
+  },
+
   updateSettings: async (partial) => {
     await window.api.settings.update(partial)
     const updated = await window.api.settings.get()
@@ -175,7 +186,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  resumeSession: async (sessionId, projectPath) => {
+  resumeSession: async (sessionId, projectPath, branch?) => {
     const currentTerminal = get().terminalSessionId
     if (currentTerminal && currentTerminal !== sessionId) {
       await window.api.terminal.kill(currentTerminal)
@@ -185,7 +196,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (result.success) {
       set({ terminalSessionId: sessionId, terminalVisible: true })
       setTimeout(() => {
-        window.api.terminal.write(sessionId, `claude --resume ${sessionId}\r`)
+        const resumeCmd = `claude --resume ${sessionId}`
+        const cmd = branch ? `git checkout "${branch}" && ${resumeCmd}` : resumeCmd
+        window.api.terminal.write(sessionId, `${cmd}\r`)
       }, 500)
     }
   },

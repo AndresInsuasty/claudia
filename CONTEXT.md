@@ -72,17 +72,19 @@ See [`docs/context-ipc.md`](docs/context-ipc.md) for the full API surface and ev
 1. User fills NewSessionDialog (repo, branch, name)
    → window.api.sessions.launchNew({ projectPath, branch, name })
    → ipc/handlers.ts: git checkout branch
-   → createTerminal('launch-<ts>', projectPath)  [placeholder terminal ID]
-   → write 'claude\r' after 600ms
    → registerPendingLaunch(projectPath, launchId, name)
-   → renderer: terminalSessionId = launchId, terminalVisible = true
+   → renderer: launchSessionTerminal(launchId, projectPath)
+   → createTerminal(launchId, projectPath)  [placeholder terminal ID]
+   → terminalSessionId = launchId, terminalVisible = true, selectedSessionId = launchId
+   → write 'claude\r' after 600ms (auto-start)
 
 2. Claude starts → writes first JSONL line
    → FileWatcher.ts (chokidar) detects new .jsonl
    → peekPendingLaunch(projectPath) → gets name
+   → Filters external sessions: only process if launched from app OR already exists
    → SessionParser.ts parses → ClaudeMessage[]
-   → Database.ts upserts session { title: name, source: 'app' }
-   → win.webContents.send('event:newSession')
+   → Database.ts upserts session { title: name, source: 'app', status: 'active' if exists }
+   → win.webContents.send('event:newSession' or 'event:sessionUpdated')
    → useSessionStore.addSession() → session appears in sidebar
 
 3. SessionStart hook fires
@@ -91,8 +93,11 @@ See [`docs/context-ipc.md`](docs/context-ipc.md) for the full API surface and ev
    → consumePendingLaunch(projectPath) → launchId
    → renameTerminal(launchId, realSessionId)
    → win.webContents.send('event:terminalLinked', { launchId, sessionId })
-   → win.webContents.send('event:sessionStarted', session)
-   → renderer: linkTerminal(launchId→realSessionId), selectSession(realSessionId)
+   → win.webContents.send('event:sessionReplaced', { launchId, sessionId, session })
+   → renderer:
+      - linkTerminal(launchId→realSessionId)
+      - replaceSession(launchId→sessionId in sessions array)
+      - selectSession(realSessionId) if status='active'
 
 4. Session ends (Stop hook)
    → markSessionCompleted() → refreshSession()
@@ -142,7 +147,7 @@ window.api.sessions.*  · projects.*  · settings.*  · hooks.*
 ```
 
 **Push events** (main → renderer via `window.api.on`):
-`event:newSession` · `event:sessionUpdated` · `event:sessionStarted` · `event:terminalLinked` · `event:messageAdded` · `event:notification` · `event:claudeStreamEvent` · `event:claudeStreamError` · `event:claudeProcessExit` · `event:terminal:data` · `event:terminal:exit`
+`event:newSession` · `event:sessionUpdated` · `event:sessionStarted` · `event:sessionReplaced` · `event:terminalLinked` · `event:messageAdded` · `event:notification` · `event:claudeStreamEvent` · `event:claudeStreamError` · `event:claudeProcessExit` · `event:terminal:data` · `event:terminal:exit`
 
 ---
 
@@ -166,15 +171,19 @@ terminalSessionId    // current PTY key (starts as launchId, updated to realSess
 terminalVisible      // controls GlobalTerminalPanel visibility
 ```
 - `openTerminalForSession(id, path)` — creates PTY, sets `terminalVisible: true`
+- `launchSessionTerminal(launchId, path)` — creates PTY with placeholder ID, auto-writes `claude\r` after 600ms, sets session as selected
 - `resumeSession(id, path)` — creates PTY + writes `claude --resume <id>\r`, sets `terminalVisible: true`
 - `toggleTerminalVisible()` — show/hide the terminal panel
 - `linkTerminal(launchId, sessionId)` — swaps placeholder ID for real session ID on `event:terminalLinked`
+- `replaceSession(launchId, sessionId, session)` — replaces placeholder session with real session in array, updates selectedSessionId and terminalSessionId
+- `invalidateMessages(sessionId)` — deletes message cache and immediately reloads messages (fixes empty cache bug)
 
 **`utils/messageGrouper.ts`** — converts flat `ClaudeMessage[]` → `ConversationTurn[]` (groups consecutive assistant + tool_result_user entries; merges thinking/tools/text blocks).
 
 **Component tree** (overview):
 ```
-App.tsx
+App.tsx  [event listeners: newSession, sessionUpdated, sessionStarted,
+          sessionReplaced, terminalLinked, messageAdded]
  ├── Sidebar.tsx (sessions/projects toggle, search, SessionItem, SettingsPanel modal)
  └── MainPanel.tsx
       ├── [left, 55% when terminal open OR full width] content area
@@ -244,15 +253,15 @@ The postinstall script (`electron-rebuild -f -w better-sqlite3,node-pty`) runs a
 
 ## Key Design Decisions
 
-1. **App-owned sessions**: Only sessions launched from within Claudia are shown. `sessions:list` filters `WHERE source = 'app'`. This prevents external Claude Code runs from polluting the UI and enables reliable terminal↔session linking.
+1. **App-owned sessions**: Only sessions launched from within Claudia are shown. FileWatcher filters sessions at ingestion time: if no `pendingLaunch` exists and session not in DB, the `.jsonl` is ignored. Database query filters `WHERE source = 'app'`. This prevents external Claude Code runs from polluting the UI and enables reliable terminal↔session linking.
 
 2. **Pending launch mechanism**: When the user launches a session, a `launchId` (placeholder) is registered in `pendingLaunches` map. FileWatcher peeks it for the user-provided name; HooksServer consumes it to rename the terminal PTY from placeholder → real session ID. This solves the race where the real session ID doesn't exist until Claude starts.
 
-3. **`event:terminalLinked`** bridges the launch and session: renderer receives `{ launchId, sessionId }` and swaps the terminal's key in the store. This lets the terminal pane render correctly before the real session ID is known.
+3. **`event:terminalLinked` + `event:sessionReplaced`** bridge the launch and session: renderer receives `{ launchId, sessionId }` and swaps the terminal's key in the store, then replaces the placeholder session entry with the real one. This lets the terminal and session list render correctly before the real session ID is known.
 
 4. **Terminal is a persistent global panel**: `GlobalTerminalPanel` renders at the `MainPanel` level (not inside `SessionView`), driven by `terminalVisible`. It persists as the user switches between session tabs or even between sessions. Toggle button lives in `ChatHeader`.
 
-5. **Resume writes the command**: `claude --resume <id>` is typed into the terminal (not passed as CLI args) to give the user a visible, interactive session they can take over. A 500ms delay gives the shell time to settle.
+5. **Terminal auto-connect on launch**: When launching a new session, `launchSessionTerminal` auto-writes `claude\r` after 600ms to start Claude immediately. The session is pre-selected in the UI with the placeholder `launchId`. For resume, `claude --resume <id>` is typed (not passed as CLI args) to give the user a visible, interactive session they can take over. A 500ms delay gives the shell time to settle.
 
 6. **`cwd` from first JSONL entry is the source of truth** for project path. The encoded folder name (`-Users-gabriel-my-project`) is only a fallback because it breaks on paths with hyphens.
 
@@ -273,7 +282,7 @@ The postinstall script (`electron-rebuild -f -w better-sqlite3,node-pty`) runs a
 - **Never access Node APIs directly from the renderer** — always go through `window.api.*`
 - **`node-pty` and `better-sqlite3` are native modules** — they must be rebuilt after `npm install` with `electron-rebuild`. If the app crashes on start, this is almost always the cause.
 - **`better-sqlite3` requires v11+** — v9 fails against Node 24 C++ headers used by Electron 29
-- **The `messages` map in the store is keyed by `sessionId`** — the lazy-load guard (`if (existing) return`) means messages won't refresh if you re-select a session. Force a refresh by deleting the cache entry first.
-- **Session status** is only set to `active` when a `SessionStart` hook fires. Without hooks installed, all sessions appear as `completed` even if Claude is currently running.
+- **The `messages` map in the store is keyed by `sessionId`** — the lazy-load guard (`if (existing) return`) means messages won't refresh if you re-select a session. The store now auto-detects empty cache on `event:sessionUpdated` and calls `invalidateMessages()` to force reload when needed.
+- **Session status** is only set to `active` when a `SessionStart` hook fires. Without hooks installed, all sessions appear as `completed` even if Claude is currently running. Active sessions are auto-selected in the UI via `event:sessionStarted` listener.
 - **`decodeProjectPath`** does filesystem I/O (greedy `fs.existsSync` walk) — it's only called at scan time, not on hot paths.
 - **The `which` package** is used to find the `claude` binary in PATH when no explicit path is configured in settings.

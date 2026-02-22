@@ -86,6 +86,7 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
             messageCount: 0,
             title: pending.name,
             tags: [],
+            branch: pending.branch,
             source: 'app' as const
           }
           sessionDb.upsert(realSession)

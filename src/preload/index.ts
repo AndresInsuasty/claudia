@@ -3,6 +3,7 @@ import type { Session, ClaudeMessage, AppSettings, Project, SessionCostSummary }
 
 const api = {
   sessions: {
+    resetActive: (): Promise<void> => ipcRenderer.invoke('sessions:resetActive'),
     list: (): Promise<Session[]> => ipcRenderer.invoke('sessions:list'),
     get: (id: string): Promise<Session | null> => ipcRenderer.invoke('sessions:get', id),
     getMessages: (id: string): Promise<ClaudeMessage[]> => ipcRenderer.invoke('sessions:getMessages', id),
@@ -58,6 +59,15 @@ const api = {
       ipcRenderer.invoke('terminal:isRunning', sessionId)
   },
 
+  reviews: {
+    save: (sessionId: string, reviewType: string, scope: string, filePath: string | null, content: string): Promise<void> =>
+      ipcRenderer.invoke('reviews:save', sessionId, reviewType, scope, filePath, content),
+    getBySession: (sessionId: string): Promise<Array<{ reviewType: string; scope: string; filePath: string | null; content: string }>> =>
+      ipcRenderer.invoke('reviews:getBySession', sessionId),
+    deleteByFile: (sessionId: string, filePath: string): Promise<void> =>
+      ipcRenderer.invoke('reviews:deleteByFile', sessionId, filePath)
+  },
+
   git: {
     lastCommitDiff: (projectPath: string): Promise<{
       files: Array<{ path: string; additions: number; deletions: number }>
@@ -67,13 +77,15 @@ const api = {
       ipcRenderer.invoke('git:fileDiff', projectPath, filePath),
     revertFile: (projectPath: string, filePath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('git:revertFile', projectPath, filePath),
+    stageFile: (projectPath: string, filePath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('git:stageFile', projectPath, filePath),
     stash: (projectPath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('git:stash', projectPath),
     branches: (projectPath: string): Promise<string[]> =>
       ipcRenderer.invoke('git:branches', projectPath),
     findRepos: (baseDir: string): Promise<string[]> =>
       ipcRenderer.invoke('git:findRepos', baseDir),
-    reviewWithClaude: (opts: { sessionId: string; projectPath: string; prompt: string }): Promise<{ success: boolean; response?: string; error?: string }> =>
+    reviewWithClaude: (opts: { projectPath: string; prompt: string }): Promise<{ success: boolean; response?: string; error?: string }> =>
       ipcRenderer.invoke('git:reviewWithClaude', opts)
   },
 
