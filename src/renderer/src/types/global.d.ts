@@ -12,6 +12,7 @@ declare global {
         updateTitle: (id: string, title: string) => Promise<void>
         addTag: (id: string, tag: string) => Promise<void>
         removeTag: (id: string, tag: string) => Promise<void>
+        launchNew: (opts: { projectPath: string; branch: string; name: string }) => Promise<{ success: boolean; launchId?: string; error?: string }>
       }
       projects: {
         list: () => Promise<Project[]>
@@ -47,6 +48,9 @@ declare global {
         branches: (projectPath: string) => Promise<string[]>
         findRepos: (baseDir: string) => Promise<string[]>
         reviewWithClaude: (opts: { sessionId: string; projectPath: string; prompt: string }) => Promise<{ success: boolean; response?: string; error?: string }>
+      }
+      dialog: {
+        openFolder: (defaultPath?: string) => Promise<string | null>
       }
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void
       off: (channel: string) => void

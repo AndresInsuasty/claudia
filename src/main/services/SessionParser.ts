@@ -110,6 +110,17 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
         if (!entry.message) continue
         const msg = entry.message
 
+        // Skip system-injected user messages from Claude Code slash commands (e.g. /exit, /status)
+        if (entry.type === 'user' && typeof msg.content === 'string') {
+          const s = msg.content as string
+          if (
+            s.startsWith('<local-command') ||
+            s.startsWith('<command-name>') ||
+            s.startsWith('<command-message>') ||
+            s.startsWith('<local-command-stdout>')
+          ) continue
+        }
+
         if (msg.model) model = msg.model
 
         if (msg.usage) {

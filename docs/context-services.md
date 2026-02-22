@@ -1,0 +1,210 @@
+# Main Process Services — Context
+
+All files live in `src/main/services/`. These run in the Electron main process (Node.js, full OS access).
+
+---
+
+## `Database.ts`
+
+SQLite via `better-sqlite3`. DB file: `app.getPath('userData')/claudia.db`.
+
+### Schema
+
+```sql
+sessions  — id, project_path, project_name, transcript_path, started_at, ended_at,
+             model, status, total_cost_usd, total_input_tokens, total_output_tokens,
+             message_count, title, tags (JSON string),
+             source TEXT NOT NULL DEFAULT 'app',   ← added via migration-safe ALTER TABLE
+             created_at
+messages  — id, session_id FK→sessions, role, content (JSON string), timestamp, usage (JSON string)
+settings  — key TEXT PK, value TEXT (single row: key='app_settings')
+projects  — path PK, name, last_active_at
+```
+
+Pragmas: `journal_mode = WAL`, `foreign_keys = ON`. Messages use `ON DELETE CASCADE`.
+
+### Exported namespaces
+
+**`sessionDb`**
+- `upsert(session)` — INSERT OR REPLACE; also upserts into `projects`; includes `source` column
+- `getById(id)`, `list()` — `list()` filters `WHERE source = 'app'`, ordered by `started_at DESC`
+- `delete(id)`, `updateTitle(id, title)`, `updateTags(id, tags[])`
+- `updateStatus(id, status, endedAt?)` — called by FileWatcher lifecycle helpers
+- `updateCost(id, summary)` — updates cost/token columns
+- `incrementMessageCount(id)` — atomic +1
+- `updateProjectPath(id, projectPath, projectName)` — repairs stale path from old decoding
+
+**`messageDb`**
+- `insert(message)` — `INSERT OR IGNORE` (idempotent; uuid is the PK)
+- `getBySessionId(sessionId)` — ordered by `timestamp ASC`; deserializes `content` and `usage` JSON
+
+**`projectDb`**
+- `list()` — JOIN with sessions to compute `session_count`, ordered by `last_active_at DESC`
+
+**`settingsDb`**
+- `get()` — merges `DEFAULT_SETTINGS` with stored JSON (safe against missing keys)
+- `update(partial)` — deep-merges and replaces the single settings row
+
+`closeDb()` — called on app quit, closes the SQLite connection.
+
+---
+
+## `SessionParser.ts`
+
+Parses `.jsonl` transcript files produced by Claude Code. Stateless utility functions only.
+
+### Key functions
+
+**`scanClaudeProjects()`** → `Array<{sessionId, projectPath, transcriptPath}>`  
+Reads `~/.claude/projects/` recursively. For each `.jsonl`, calls `readFirstEntry()` to get `cwd`; falls back to `decodeProjectPath(encodedFolder)` only if `cwd` is absent.
+
+**`parseTranscriptFile(path)`** → `{messages, costSummary, cwd?}`  
+Streams JSONL line-by-line via `readline`. Rules:
+- Skips `progress` and `file-history-snapshot` entries
+- Skips user messages whose `content` string starts with `<local-command`, `<command-name>`, `<command-message>`, `<local-command-stdout>` (slash-command plumbing)
+- Handles both `string` and `array` content formats
+- Uses `entry.uuid` (NOT `msg.id`) as the message PK — critical because streaming splits one API response into multiple JSONL entries that share the same `msg.id`
+- Accumulates token counts and calculates cost via `getCostForModel(model, input, output)`
+
+**`readFirstEntry(path)`** → `TranscriptEntry | null`  
+Reads only until it finds the first entry with a `cwd` field (skipping `file-history-snapshot`). Used to get project path cheaply without parsing the whole file.
+
+**`decodeProjectPath(encodedPath)`** → `string`  
+Claude Code encodes paths by replacing `/` with `-`. This function does a greedy filesystem walk (`fs.existsSync`) to reconstruct the real path, handling directory names that contain hyphens. Only used as fallback when `cwd` is absent.
+
+**`deriveSessionTitle(messages)`** → `string | null`  
+First 60 chars of first user message text block.
+
+**`deriveProjectName(projectPath)`** → last path segment.
+
+**`parseStreamJsonLine(line)`** → `TranscriptEntry | null`  
+Safe JSON.parse wrapper for streaming event lines.
+
+### Cost model (hardcoded)
+- Opus: $15/M input, $75/M output
+- Sonnet/other: $3/M input, $15/M output
+
+---
+
+## `FileWatcher.ts`
+
+Uses `chokidar` to watch `~/.claude/projects/` at depth 2. Bridges file system events → SQLite → IPC events to renderer.
+
+### Internal state
+
+```ts
+watchedFiles:    Map<transcriptPath, { sessionId, projectPath, transcriptPath, lastSize, lastLineCount }>
+watcher:         chokidar.FSWatcher | null
+pendingLaunches: Map<projectPath, { launchId: string, name: string }>
+```
+
+Registered when the user launches a session from the dialog; consumed by HooksServer on `SessionStart` to rename the terminal. FileWatcher only *peeks* (read-only) to get the user name for the session title.
+
+### Exported launch helpers
+
+- **`registerPendingLaunch(projectPath, launchId, name)`** — stores a pending launch entry
+- **`consumePendingLaunch(projectPath)`** — reads and deletes the entry (used by HooksServer)
+- **`peekPendingLaunch(projectPath)`** — read-only lookup (used by FileWatcher for the title)
+
+### Lifecycle
+
+**`startFileWatcher(win)`**
+1. Starts chokidar watcher with `ignoreInitial: true` — **no startup import of existing sessions**
+2. Binds `onFileAdded` and `onFileChanged` handlers
+
+> `importExistingSessions()` is preserved in the file but not called. It will be used by the Phase 2 Import feature.
+
+**`stopFileWatcher()`** — closes chokidar instance
+
+### File event handlers
+
+**`onFileAdded(filePath, win)`** — called when a new `.jsonl` appears  
+Reads `cwd` from first entry, calls `processNewTranscript()`.
+
+**`onFileChanged(filePath, win)`** — called when a known file grows  
+Reads only `messages.slice(watched.lastLineCount)` (new lines only), inserts them, updates cost, sends `event:messageAdded` and `event:sessionUpdated` to renderer.
+
+**`processNewTranscript(sessionId, projectPath, transcriptPath, win)`** — full parse  
+- Calls `peekPendingLaunch(projectPath)` to get the user-provided name (if session was launched from app)
+- Uses that name as `title`; falls back to `deriveSessionTitle(messages)` if not found
+- Creates `Session` with `status: 'completed'` and `source: 'app'`, upserts to DB, inserts all messages, sends `event:newSession`
+
+**`importExistingSessions(win)`** — preserved but not called at startup  
+For Phase 2 (Import feature). For each session from `scanClaudeProjects()`:
+- If already in DB: repairs stale `projectPath` if needed, registers in `watchedFiles` with correct `lastLineCount`
+- If new: calls `processNewTranscript()`
+
+### Exported helpers (used by HooksServer)
+
+- `markSessionActive(sessionId)` — `sessionDb.updateStatus(id, 'active')`
+- `markSessionCompleted(sessionId)` — `sessionDb.updateStatus(id, 'completed', now)`
+- `refreshSession(sessionId, win)` — re-runs `onFileChanged` for the session's transcript
+- `forceProcessSession(sessionId, win)` — scans for a not-yet-watched session and processes it
+
+---
+
+## `HooksServer.ts`
+
+Minimal `http.createServer` on `127.0.0.1:27182` (configurable). Only started if `settings.hooksEnabled === true`.
+
+### Hook events handled
+
+**`SessionStart`**  
+Uses a retry loop (`tryNotifyStart`, up to 10 attempts × 500ms) because the JSONL file may not exist yet when the hook fires. Once the session is in DB:
+1. Calls `markSessionActive(sessionId)`
+2. Calls `consumePendingLaunch(session.projectPath)` to get `{ launchId, name }`
+3. If found: calls `renameTerminal(launchId, sessionId)` + sends `event:terminalLinked { launchId, sessionId }`
+4. Sends `event:sessionStarted` with the updated session
+
+**`Stop` / `SessionEnd`**  
+Calls `markSessionCompleted()`, then `refreshSession()` to pull final messages, sends `event:sessionUpdated`.
+
+**`Notification`**  
+Forwards `{sessionId, message}` as `event:notification` to renderer.
+
+### Exported API
+- `startHooksServer(win, port)` — idempotent (returns early if already running)
+- `stopHooksServer()`
+- `isHooksServerRunning()` → boolean
+
+---
+
+## `TerminalService.ts`
+
+Manages `node-pty` PTY instances and provides git CLI helpers.
+
+### node-pty loading
+
+Lazy-loaded via `require('node-pty')` inside `getPty()` to avoid crashing if native rebuild hasn't been run. Falls back gracefully with a console error.
+
+### Terminal management
+
+Internal: `terminals: Map<sessionId, { proc: IPty, cwd: string }>`
+
+- **`createTerminal(sessionId, cwd, win)`** — spawns `$SHELL` (default `/bin/zsh`) with `xterm-256color` at 120×36. Streams PTY output as `event:terminal:data`; cleans up on exit via `event:terminal:exit`. Kills any existing terminal for that session first.
+- **`writeTerminal(sessionId, data)`** — forwards keystrokes to PTY
+- **`resizeTerminal(sessionId, cols, rows)`** — PTY resize on DOM resize
+- **`killTerminal(sessionId)`** — kills PTY, removes from map
+- **`renameTerminal(oldId, newId)`** — moves PTY entry in the `terminals` Map without touching the process; used to swap `launchId` placeholder → real `sessionId` on `SessionStart`
+- **`killAllTerminals()`** — called on app quit
+- **`isTerminalRunning(sessionId)`** → boolean
+
+### Git helpers (all use `child_process.exec` with `cwd`)
+
+- **`getLastCommitDiff(projectPath)`** → `{files: [{path, additions, deletions}], rawDiff}`  
+  Runs `git show HEAD --stat --format=` + `git show HEAD`. Parses stat output to compute +/- line counts.
+
+- **`getFileDiff(projectPath, filePath)`** → raw diff string  
+  `git show HEAD -- "<file>"`
+
+- **`revertFile(projectPath, filePath)`** → `{success, error?}`  
+  `git checkout HEAD~1 -- "<file>"`
+
+- **`stashChanges(projectPath)`** → `{success, error?}`  
+  `git stash`
+
+- **`getBranches(projectPath)`** → `string[]`  
+  `git branch --list` — strips `* ` prefix marker
+
+- **`findGitRepos(baseDir, maxDepth=3)`** → `string[]`  
+  `find "<dir>" -maxdepth <n> -name ".git" -type d | head -100` — strips `/.git` suffix. Resolves `~` to `$HOME`.

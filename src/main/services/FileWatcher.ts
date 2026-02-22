@@ -25,6 +25,27 @@ interface WatchedFile {
 const watchedFiles = new Map<string, WatchedFile>()
 let watcher: ReturnType<typeof chokidar.watch> | null = null
 
+interface PendingLaunch {
+  launchId: string
+  name: string
+}
+
+const pendingLaunches = new Map<string, PendingLaunch>()
+
+export function registerPendingLaunch(projectPath: string, launchId: string, name: string): void {
+  pendingLaunches.set(projectPath, { launchId, name })
+}
+
+export function consumePendingLaunch(projectPath: string): PendingLaunch | undefined {
+  const entry = pendingLaunches.get(projectPath)
+  if (entry) pendingLaunches.delete(projectPath)
+  return entry
+}
+
+export function peekPendingLaunch(projectPath: string): PendingLaunch | undefined {
+  return pendingLaunches.get(projectPath)
+}
+
 export async function startFileWatcher(win: BrowserWindow): Promise<void> {
   const projectsDir = getClaudeProjectsDir()
 
@@ -32,14 +53,15 @@ export async function startFileWatcher(win: BrowserWindow): Promise<void> {
     fs.mkdirSync(projectsDir, { recursive: true })
   }
 
-  await importExistingSessions(win)
+  // Note: importExistingSessions() is intentionally NOT called here.
+  // Sessions are only shown if started from the app. The function is
+  // preserved below for Phase 2 (Import feature).
 
   watcher = chokidar.watch(projectsDir, {
     ignored: /(^|[/\\])\../,
     persistent: true,
     ignoreInitial: true,
-    depth: 2,
-    awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }
+    depth: 2
   })
 
   watcher
@@ -140,9 +162,16 @@ async function processNewTranscript(
   const { messages, costSummary, cwd } = await parseTranscriptFile(transcriptPath)
   const resolvedProjectPath = cwd || projectPath
   const projectName = deriveProjectName(resolvedProjectPath)
-  const title = deriveSessionTitle(messages)
+
+  // Check if this transcript was launched from the app (peek only — HooksServer will consume)
+  const pending = peekPendingLaunch(resolvedProjectPath) || peekPendingLaunch(projectPath)
+  // title=null means COALESCE in DB will keep existing title (user-provided name)
+  const title = pending ? pending.name : deriveSessionTitle(messages)
 
   const stat = fs.existsSync(transcriptPath) ? fs.statSync(transcriptPath) : null
+
+  // Check if session already exists (created by HooksServer from SessionStart hook)
+  const alreadyExists = !!sessionDb.getById(sessionId)
 
   const session: Session = {
     id: sessionId,
@@ -151,13 +180,14 @@ async function processNewTranscript(
     transcriptPath,
     startedAt: stat ? stat.birthtime.toISOString() : new Date().toISOString(),
     model: 'claude-opus-4-5',
-    status: 'completed',
+    status: alreadyExists ? 'active' : 'completed',
     totalCostUsd: costSummary.totalCostUsd,
     totalInputTokens: costSummary.totalInputTokens,
     totalOutputTokens: costSummary.totalOutputTokens,
     messageCount: messages.length,
     title,
-    tags: []
+    tags: [],
+    source: 'app'
   }
 
   sessionDb.upsert(session)
@@ -174,7 +204,25 @@ async function processNewTranscript(
     lastLineCount: messages.length
   })
 
-  win.webContents.send('event:newSession', session)
+  // If session was already in the sidebar (created by HooksServer), update it; otherwise add it
+  if (alreadyExists) {
+    const updated = sessionDb.getById(sessionId)
+    if (updated) win.webContents.send('event:sessionUpdated', updated)
+  } else {
+    win.webContents.send('event:newSession', session)
+  }
+}
+
+export async function refreshSession(
+  sessionId: string,
+  win: BrowserWindow
+): Promise<void> {
+  const entry = Array.from(watchedFiles.values()).find(w => w.sessionId === sessionId)
+  if (!entry) {
+    await forceProcessSession(sessionId, win)
+    return
+  }
+  await onFileChanged(entry.transcriptPath, win)
 }
 
 export async function forceProcessSession(

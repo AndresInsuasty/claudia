@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { X, Check, AlertCircle, Loader } from 'lucide-react'
+import { X, Check, AlertCircle, Loader, FolderOpen } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import type { AppSettings } from '../../../../shared/types'
 
@@ -171,13 +171,28 @@ export default function SettingsPanel({ onClose }: Props): React.JSX.Element {
                   Projects Root Directory
                   <span className="text-claude-muted ml-1 font-normal">(for New Session repo scanner)</span>
                 </label>
-                <input
-                  type="text"
-                  placeholder="e.g. /Users/you/Documents  (leave empty to scan home)"
-                  value={local.projectsRootDir ?? ''}
-                  onChange={e => update('projectsRootDir', e.target.value)}
-                  className="w-full bg-claude-dark border border-claude-border rounded-lg px-3 py-2 text-sm text-claude-text outline-none focus:border-claude-orange placeholder-claude-muted font-mono"
-                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const picked = await window.api.dialog.openFolder(local.projectsRootDir || undefined)
+                    if (picked) update('projectsRootDir', picked)
+                  }}
+                  className="w-full flex items-center gap-2 bg-claude-dark border border-claude-border rounded-lg px-3 py-2 text-sm outline-none hover:border-claude-orange transition-colors text-left group"
+                >
+                  <FolderOpen size={14} className="text-claude-muted group-hover:text-claude-orange shrink-0 transition-colors" />
+                  <span className={`flex-1 font-mono truncate ${local.projectsRootDir ? 'text-claude-text' : 'text-claude-muted'}`}>
+                    {local.projectsRootDir || 'Click to select a folder…'}
+                  </span>
+                  {local.projectsRootDir && (
+                    <span
+                      role="button"
+                      onClick={e => { e.stopPropagation(); update('projectsRootDir', '') }}
+                      className="text-claude-muted hover:text-claude-text ml-1"
+                    >
+                      <X size={12} />
+                    </span>
+                  )}
+                </button>
               </div>
             </div>
           </section>

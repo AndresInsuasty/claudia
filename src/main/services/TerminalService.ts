@@ -22,17 +22,25 @@ interface TerminalInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   proc: any
   cwd: string
+  currentId: string
 }
 
 const terminals = new Map<string, TerminalInstance>()
 
 export function createTerminal(sessionId: string, cwd: string, win: BrowserWindow): boolean {
   const nodePty = getPty()
-  if (!nodePty) return false
+  if (!nodePty) {
+    console.error(`[TerminalService] createTerminal FAILED — node-pty not available (id=${sessionId})`)
+    return false
+  }
 
-  if (terminals.has(sessionId)) killTerminal(sessionId)
+  if (terminals.has(sessionId)) {
+    console.warn(`[TerminalService] createTerminal: id=${sessionId} already exists — killing before recreating`)
+    killTerminal(sessionId)
+  }
 
   const shell = process.env.SHELL || '/bin/zsh'
+  console.log(`[TerminalService] createTerminal id=${sessionId} shell=${shell} cwd=${cwd}`)
 
   const proc = nodePty.spawn(shell, [], {
     name: 'xterm-256color',
@@ -42,16 +50,20 @@ export function createTerminal(sessionId: string, cwd: string, win: BrowserWindo
     env: { ...process.env }
   })
 
+  const inst: TerminalInstance = { proc, cwd, currentId: sessionId }
+
   proc.onData((data: string) => {
-    win.webContents.send('event:terminal:data', { sessionId, data })
+    win.webContents.send('event:terminal:data', { sessionId: inst.currentId, data })
   })
 
-  proc.onExit(() => {
-    terminals.delete(sessionId)
-    win.webContents.send('event:terminal:exit', { sessionId })
+  proc.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+    console.log(`[TerminalService] onExit id=${inst.currentId} exitCode=${exitCode} signal=${signal}`)
+    terminals.delete(inst.currentId)
+    win.webContents.send('event:terminal:exit', { sessionId: inst.currentId })
   })
 
-  terminals.set(sessionId, { proc, cwd })
+  terminals.set(sessionId, inst)
+  console.log(`[TerminalService] createTerminal OK id=${sessionId} (total active: ${terminals.size})`)
   return true
 }
 
@@ -66,9 +78,26 @@ export function resizeTerminal(sessionId: string, cols: number, rows: number): v
 export function killTerminal(sessionId: string): void {
   const inst = terminals.get(sessionId)
   if (inst) {
-    try { inst.proc.kill() } catch {}
+    console.log(`[TerminalService] killTerminal id=${sessionId}`)
+    try { inst.proc.kill() } catch (e) {
+      console.error(`[TerminalService] killTerminal error for id=${sessionId}:`, e)
+    }
     terminals.delete(sessionId)
+  } else {
+    console.warn(`[TerminalService] killTerminal: id=${sessionId} not found (already gone?)`)
   }
+}
+
+export function renameTerminal(oldId: string, newId: string): void {
+  const inst = terminals.get(oldId)
+  if (!inst) {
+    console.warn(`[TerminalService] renameTerminal: oldId=${oldId} not found — cannot rename to ${newId}`)
+    return
+  }
+  console.log(`[TerminalService] renameTerminal ${oldId} → ${newId}`)
+  inst.currentId = newId
+  terminals.delete(oldId)
+  terminals.set(newId, inst)
 }
 
 export function killAllTerminals(): void {
@@ -147,16 +176,17 @@ export async function getBranches(projectPath: string): Promise<string[]> {
   }
 }
 
-export async function findGitRepos(baseDir: string, maxDepth = 3): Promise<string[]> {
+export async function findGitRepos(baseDir: string, maxDepth = 5): Promise<string[]> {
   try {
     const home = process.env.HOME || process.env.USERPROFILE || '/tmp'
     const resolvedDir = baseDir === '~' ? home : baseDir.replace(/^~/, home)
     const { stdout } = await execAsync(
-      `find "${resolvedDir}" -maxdepth ${maxDepth} -name ".git" -type d 2>/dev/null | head -100`
+      `find "${resolvedDir}" -maxdepth ${maxDepth} -name ".git" -type d -prune 2>/dev/null | head -500`
     )
     return stdout.split('\n')
       .filter(Boolean)
       .map(p => p.replace(/\/.git$/, ''))
+      .sort()
   } catch {
     return []
   }

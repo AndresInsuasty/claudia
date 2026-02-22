@@ -12,6 +12,39 @@ import NewSessionDialog from './NewSessionDialog'
 import { Code2, ScrollText, Info, Zap, Plus } from 'lucide-react'
 import type { Session } from '../../../../shared/types'
 
+function GlobalTerminalPanel(): React.JSX.Element | null {
+  const { terminalSessionId, terminalVisible, closeTerminal } = useSessionStore()
+
+  if (!terminalVisible) return null
+
+  return (
+    <div className="w-[45%] min-w-[320px] border-l border-claude-border flex flex-col">
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-claude-panel border-b border-claude-border shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
+          <span className="text-xs text-claude-text font-medium">Terminal</span>
+          {terminalSessionId && (
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" title="Connected" />
+          )}
+        </div>
+        <button
+          onClick={closeTerminal}
+          className="text-claude-muted hover:text-claude-text text-xs px-2 py-0.5 rounded hover:bg-claude-hover transition-colors"
+          title="Close terminal"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        {terminalSessionId
+          ? <TerminalPane sessionId={terminalSessionId} />
+          : <div className="flex items-center justify-center h-full text-claude-muted text-xs">No terminal session</div>
+        }
+      </div>
+    </div>
+  )
+}
+
 type TabId = 'logs' | 'code' | 'session' | 'consumption'
 
 interface TabDef {
@@ -32,29 +65,17 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
   const isActive = session.status === 'active'
   const [activeTab, setActiveTab] = useState<TabId>('logs')
   const [showNewSession, setShowNewSession] = useState(false)
-  const { terminalSessionId, openTerminalForSession, closeTerminal } = useSessionStore()
+  const { terminalVisible, resumeSession } = useSessionStore()
 
-  const terminalOpen = terminalSessionId === session.id
   const currentTab = isActive ? activeTab : (activeTab === 'code' ? 'logs' : activeTab)
 
   const handleResume = useCallback(async () => {
-    await openTerminalForSession(session.id, session.projectPath)
-  }, [session.id, session.projectPath, openTerminalForSession])
+    await resumeSession(session.id, session.projectPath)
+  }, [session.id, session.projectPath, resumeSession])
 
   const handleRollback = useCallback(async () => {
     await window.api.git.stash(session.projectPath)
   }, [session.projectPath])
-
-  const handleCloseTerminal = useCallback(async () => {
-    await closeTerminal()
-  }, [closeTerminal])
-
-  const handleLaunchNew = async (projectPath: string, _branch: string) => {
-    const result = await window.api.terminal.create(`new-${Date.now()}`, projectPath)
-    if (result.success) {
-      setTerminalOpen(true)
-    }
-  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -65,10 +86,8 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
       {isActive && (
         <SessionControls
           session={session}
-          terminalOpen={terminalOpen}
           onResume={handleResume}
           onRollback={handleRollback}
-          onClose={handleCloseTerminal}
         />
       )}
 
@@ -107,72 +126,43 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
         </div>
       </div>
 
-      {/* Main content area — tabs left, terminal right */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Tab content */}
-        <div className={`flex flex-col overflow-hidden ${terminalOpen ? 'w-[55%]' : 'flex-1'}`}>
-          {currentTab === 'logs'        && <LogsTab session={session} />}
-          {currentTab === 'session'     && <SessionInfoTab session={session} />}
-          {currentTab === 'consumption' && <ConsumptionTab session={session} />}
-          {currentTab === 'code'        && isActive && <CodeTab session={session} />}
-        </div>
-
-        {/* Terminal pane — right side, shows for active sessions automatically */}
-        {terminalOpen && (
-          <div className="w-[45%] min-w-[320px] border-l border-claude-border flex flex-col">
-            <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-claude-panel border-b border-claude-border shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
-                <span className="text-xs text-claude-text font-medium">Terminal</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" title="Connected" />
-              </div>
-              <button
-                onClick={handleCloseTerminal}
-                className="text-claude-muted hover:text-claude-text text-xs px-2 py-0.5 rounded hover:bg-claude-hover transition-colors"
-                title="Close terminal"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <TerminalPane sessionId={session.id} />
-            </div>
-          </div>
-        )}
+      {/* Tab content — fills available space; terminal panel is rendered at MainPanel level */}
+      <div className="flex flex-col flex-1 overflow-hidden">
+        {currentTab === 'logs'        && <LogsTab session={session} />}
+        {currentTab === 'session'     && <SessionInfoTab session={session} />}
+        {currentTab === 'consumption' && <ConsumptionTab session={session} />}
+        {currentTab === 'code'        && isActive && <CodeTab session={session} />}
       </div>
 
       {showNewSession && (
-        <NewSessionDialog onClose={() => setShowNewSession(false)} onLaunch={handleLaunchNew} />
+        <NewSessionDialog onClose={() => setShowNewSession(false)} />
       )}
     </div>
   )
 }
 
 export default function MainPanel(): React.JSX.Element {
-  const { selectedSessionId, sessions } = useSessionStore()
+  const { selectedSessionId, sessions, terminalVisible } = useSessionStore()
   const [showNewSession, setShowNewSession] = useState(false)
   const session = sessions.find(s => s.id === selectedSessionId)
 
-  if (!selectedSessionId || !session) {
-    return (
+  const content = !selectedSessionId || !session
+    ? (
       <>
         <WelcomeScreen onNewSession={() => setShowNewSession(true)} />
         {showNewSession && (
-          <NewSessionDialog
-            onClose={() => setShowNewSession(false)}
-            onLaunch={async (projectPath) => {
-              await window.api.terminal.create(`new-${Date.now()}`, projectPath)
-              setShowNewSession(false)
-            }}
-          />
+          <NewSessionDialog onClose={() => setShowNewSession(false)} />
         )}
       </>
     )
-  }
+    : <SessionView session={session} />
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <SessionView session={session} />
+    <div className="flex-1 flex flex-row overflow-hidden">
+      <div className={`flex flex-col overflow-hidden ${terminalVisible ? 'w-[55%]' : 'flex-1'}`}>
+        {content}
+      </div>
+      <GlobalTerminalPanel />
     </div>
   )
 }

@@ -10,7 +10,13 @@ const api = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
     updateTitle: (id: string, title: string): Promise<void> => ipcRenderer.invoke('sessions:updateTitle', id, title),
     addTag: (id: string, tag: string): Promise<void> => ipcRenderer.invoke('sessions:addTag', id, tag),
-    removeTag: (id: string, tag: string): Promise<void> => ipcRenderer.invoke('sessions:removeTag', id, tag)
+    removeTag: (id: string, tag: string): Promise<void> => ipcRenderer.invoke('sessions:removeTag', id, tag),
+    launchNew: (opts: {
+      projectPath: string
+      branch: string
+      name: string
+    }): Promise<{ success: boolean; launchId?: string; error?: string }> =>
+      ipcRenderer.invoke('sessions:launchNew', opts)
   },
 
   projects: {
@@ -71,9 +77,15 @@ const api = {
       ipcRenderer.invoke('git:reviewWithClaude', opts)
   },
 
+  dialog: {
+    openFolder: (defaultPath?: string): Promise<string | null> =>
+      ipcRenderer.invoke('dialog:openFolder', defaultPath)
+  },
+
   on: (channel: string, callback: (...args: unknown[]) => void) => {
-    ipcRenderer.on(channel, (_event, ...args) => callback(...args))
-    return () => ipcRenderer.removeAllListeners(channel)
+    const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]): void => callback(...args)
+    ipcRenderer.on(channel, handler)
+    return () => ipcRenderer.removeListener(channel, handler)
   },
 
   off: (channel: string) => {

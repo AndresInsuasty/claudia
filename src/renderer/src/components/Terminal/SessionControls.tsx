@@ -1,16 +1,14 @@
 import React, { useState } from 'react'
-import { RotateCcw, Play, X, Loader } from 'lucide-react'
+import { RotateCcw, Play, Loader } from 'lucide-react'
 import type { Session } from '../../../../shared/types'
 
 interface Props {
   session: Session
-  terminalOpen: boolean
   onResume: () => Promise<void>
   onRollback: () => Promise<void>
-  onClose: () => void
 }
 
-export default function SessionControls({ session, terminalOpen, onResume, onRollback, onClose }: Props): React.JSX.Element {
+export default function SessionControls({ session, onResume, onRollback }: Props): React.JSX.Element {
   const [rolling, setRolling] = useState(false)
   const [resuming, setResuming] = useState(false)
   const [rollbackMsg, setRollbackMsg] = useState('')
@@ -44,26 +42,15 @@ export default function SessionControls({ session, terminalOpen, onResume, onRol
         Rollback
       </button>
 
-      {!terminalOpen ? (
-        <button
-          onClick={handleResume}
-          disabled={resuming}
-          title={`claude --resume ${session.id}`}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-claude-orange text-white hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
-          {resuming ? <Loader size={13} className="animate-spin" /> : <Play size={13} />}
-          Resume
-        </button>
-      ) : (
-        <button
-          onClick={onClose}
-          title="Close terminal"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-red-400 hover:text-red-300 hover:bg-red-950/20 transition-colors"
-        >
-          <X size={13} />
-          Close
-        </button>
-      )}
+      <button
+        onClick={handleResume}
+        disabled={resuming}
+        title={`claude --resume ${session.id}`}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-claude-orange text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+      >
+        {resuming ? <Loader size={13} className="animate-spin" /> : <Play size={13} />}
+        Resume
+      </button>
 
       {rollbackMsg && (
         <span className="text-xs text-green-400 ml-2">{rollbackMsg}</span>

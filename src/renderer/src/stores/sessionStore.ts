@@ -10,6 +10,7 @@ interface SessionStore {
   isLoading: boolean
   sidebarView: 'sessions' | 'projects'
   terminalSessionId: string | null
+  terminalVisible: boolean
 
   loadSessions: () => Promise<void>
   loadProjects: () => Promise<void>
@@ -24,7 +25,12 @@ interface SessionStore {
   deleteSession: (id: string) => Promise<void>
   updateSessionTitle: (id: string, title: string) => Promise<void>
   openTerminalForSession: (sessionId: string, projectPath: string) => Promise<void>
+  launchSessionTerminal: (launchId: string, projectPath: string) => Promise<void>
+  resumeSession: (sessionId: string, projectPath: string) => Promise<void>
   closeTerminal: () => Promise<void>
+  toggleTerminalVisible: () => void
+  linkTerminal: (launchId: string, sessionId: string) => void
+  replaceSession: (launchId: string, sessionId: string, session: Session) => void
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
@@ -36,6 +42,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   isLoading: false,
   sidebarView: 'sessions',
   terminalSessionId: null,
+  terminalVisible: false,
 
   loadSessions: async () => {
     set({ isLoading: true })
@@ -133,15 +140,50 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   openTerminalForSession: async (sessionId, projectPath) => {
     const currentTerminal = get().terminalSessionId
-    // Close previous terminal if exists
+    // Close previous terminal if it belongs to a different session
     if (currentTerminal && currentTerminal !== sessionId) {
       await window.api.terminal.kill(currentTerminal)
     }
 
     const result = await window.api.terminal.create(sessionId, projectPath)
     if (result.success) {
-      set({ terminalSessionId: sessionId })
-      // Auto-resume the session in the terminal
+      set({ terminalSessionId: sessionId, terminalVisible: true })
+    }
+  },
+
+  launchSessionTerminal: async (launchId, projectPath) => {
+    console.log(`[sessionStore] launchSessionTerminal id=${launchId} path=${projectPath}`)
+    const currentTerminal = get().terminalSessionId
+    if (currentTerminal && currentTerminal !== launchId) {
+      console.log(`[sessionStore] killing previous terminal id=${currentTerminal}`)
+      await window.api.terminal.kill(currentTerminal)
+    }
+
+    const result = await window.api.terminal.create(launchId, projectPath)
+    console.log(`[sessionStore] terminal.create result:`, result)
+    if (result.success) {
+      set({ terminalSessionId: launchId, terminalVisible: true, selectedSessionId: launchId })
+      setTimeout(() => {
+        const currentId = get().terminalSessionId
+        console.log(`[sessionStore] writing 'claude\\r' to terminal id=${currentId} (original launchId=${launchId})`)
+        if (currentId) {
+          window.api.terminal.write(currentId, 'claude\r')
+        }
+      }, 600)
+    } else {
+      console.error(`[sessionStore] terminal.create failed for id=${launchId}`)
+    }
+  },
+
+  resumeSession: async (sessionId, projectPath) => {
+    const currentTerminal = get().terminalSessionId
+    if (currentTerminal && currentTerminal !== sessionId) {
+      await window.api.terminal.kill(currentTerminal)
+    }
+
+    const result = await window.api.terminal.create(sessionId, projectPath)
+    if (result.success) {
+      set({ terminalSessionId: sessionId, terminalVisible: true })
       setTimeout(() => {
         window.api.terminal.write(sessionId, `claude --resume ${sessionId}\r`)
       }, 500)
@@ -152,7 +194,31 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const sessionId = get().terminalSessionId
     if (sessionId) {
       await window.api.terminal.kill(sessionId)
-      set({ terminalSessionId: null })
+      set({ terminalSessionId: null, terminalVisible: false })
     }
+  },
+
+  toggleTerminalVisible: () => {
+    set(state => ({ terminalVisible: !state.terminalVisible }))
+  },
+
+  linkTerminal: (launchId, sessionId) => {
+    const { terminalSessionId } = get()
+    if (terminalSessionId === launchId) {
+      set({ terminalSessionId: sessionId })
+    }
+  },
+
+  replaceSession: (launchId, sessionId, session) => {
+    set(state => {
+      const sessions = state.sessions.filter(s => s.id !== launchId)
+      const alreadyExists = sessions.some(s => s.id === sessionId)
+      const nextSessions = alreadyExists ? sessions : [session, ...sessions]
+      return {
+        sessions: nextSessions,
+        selectedSessionId: state.selectedSessionId === launchId ? sessionId : state.selectedSessionId,
+        terminalSessionId: state.terminalSessionId === launchId ? sessionId : state.terminalSessionId
+      }
+    })
   }
 }))

@@ -23,6 +23,7 @@ export interface Session {
   messageCount: number
   tags: string[]
   title?: string
+  source?: 'app' | 'external'
 }
 
 export type ClaudeMessageRole = 'user' | 'assistant'
@@ -186,9 +187,17 @@ export interface IpcChannels {
   }) => { success: boolean; pid?: number; error?: string }
   'claude:kill': (pid: number) => void
 
+  // Session launch (new flow)
+  'sessions:launchNew': (opts: {
+    projectPath: string
+    branch: string
+    name: string
+  }) => { success: boolean; launchId?: string; error?: string }
+
   // Events (main -> renderer)
   'event:sessionStarted': Session
   'event:sessionUpdated': Session
   'event:messageAdded': { sessionId: string; message: ClaudeMessage }
   'event:newSession': Session
+  'event:terminalLinked': { launchId: string; sessionId: string }
 }

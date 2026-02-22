@@ -12,8 +12,9 @@ export default function App(): React.JSX.Element {
     addSession,
     updateSession,
     addMessage,
-    openTerminalForSession,
-    selectSession
+    selectSession,
+    linkTerminal,
+    replaceSession
   } = useSessionStore()
 
   useEffect(() => {
@@ -31,21 +32,31 @@ export default function App(): React.JSX.Element {
 
     const offSessionStarted = window.api.on('event:sessionStarted', (session: unknown) => {
       const sess = session as Session
+      addSession(sess)
       updateSession(sess)
-
-      // Auto-open terminal for active sessions
       if (sess.status === 'active') {
-        openTerminalForSession(sess.id, sess.projectPath)
-        // Auto-select the session to show it in the UI
         selectSession(sess.id)
       }
+    })
+
+    const offSessionReplaced = window.api.on('event:sessionReplaced', (data: unknown) => {
+      const { launchId, sessionId, session } = data as { launchId: string; sessionId: string; session: Session }
+      replaceSession(launchId, sessionId, session)
+    })
+
+    const offTerminalLinked = window.api.on('event:terminalLinked', (data: unknown) => {
+      const { launchId, sessionId } = data as { launchId: string; sessionId: string }
+      linkTerminal(launchId, sessionId)
     })
 
     const offMessageAdded = window.api.on(
       'event:messageAdded',
       (data: unknown) => {
         const { sessionId, message } = data as { sessionId: string; message: ClaudeMessage }
-        addMessage(sessionId, message)
+        const { selectedSessionId } = useSessionStore.getState()
+        if (sessionId === selectedSessionId) {
+          addMessage(sessionId, message)
+        }
         loadSessions()
       }
     )
@@ -54,6 +65,8 @@ export default function App(): React.JSX.Element {
       offNewSession()
       offSessionUpdated()
       offSessionStarted()
+      offSessionReplaced()
+      offTerminalLinked()
       offMessageAdded()
     }
   }, [])

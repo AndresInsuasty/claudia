@@ -1,19 +1,25 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Search, GitBranch, Folder, X, Play, Loader } from 'lucide-react'
+import { Search, GitBranch, Folder, X, Play, Loader, Tag } from 'lucide-react'
+import { useSessionStore } from '../../stores/sessionStore'
 
 interface Props {
   onClose: () => void
-  onLaunch: (projectPath: string, branch: string) => Promise<void>
 }
 
-export default function NewSessionDialog({ onClose, onLaunch }: Props): React.JSX.Element {
+const SLUG_RE = /^[a-z0-9_]+$/
+
+export default function NewSessionDialog({ onClose }: Props): React.JSX.Element {
+  const { launchSessionTerminal } = useSessionStore()
   const [repos, setRepos] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
   const [branches, setBranches] = useState<string[]>([])
   const [branch, setBranch] = useState('')
+  const [sessionName, setSessionName] = useState('')
+  const [nameError, setNameError] = useState('')
   const [launching, setLaunching] = useState(false)
+  const [launchError, setLaunchError] = useState('')
   const [scanDir, setScanDir] = useState('')
 
   useEffect(() => {
@@ -40,13 +46,38 @@ export default function NewSessionDialog({ onClose, onLaunch }: Props): React.JS
     setBranches(bs)
     const current = bs.find(b => b.startsWith('* '))
     setBranch(current ? current.replace(/^\* /, '') : (bs[0] ?? 'main'))
+    if (!sessionName) {
+      const name = repoPath.split('/').pop() ?? ''
+      setSessionName(name.replace(/[^a-z0-9_]/gi, '_').toLowerCase())
+    }
+  }
+
+  const validateName = (v: string) => {
+    if (!v.trim()) return 'Session name is required'
+    if (!SLUG_RE.test(v)) return 'Use only lowercase letters, numbers and underscores'
+    return ''
   }
 
   const handleLaunch = async () => {
     if (!selected) return
+    const err = validateName(sessionName)
+    if (err) { setNameError(err); return }
+    setNameError('')
+    setLaunchError('')
     setLaunching(true)
     try {
-      await onLaunch(selected, branch)
+      const result = await window.api.sessions.launchNew({
+        projectPath: selected,
+        branch,
+        name: sessionName
+      })
+      if (!result.success) {
+        setLaunchError(result.error ?? 'Launch failed')
+        return
+      }
+      if (result.launchId) {
+        await launchSessionTerminal(result.launchId, selected)
+      }
       onClose()
     } finally {
       setLaunching(false)
@@ -55,7 +86,7 @@ export default function NewSessionDialog({ onClose, onLaunch }: Props): React.JS
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-claude-panel border border-claude-border rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
+      <div className="bg-claude-panel border border-claude-border rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-claude-border shrink-0">
           <div>
@@ -116,7 +147,7 @@ export default function NewSessionDialog({ onClose, onLaunch }: Props): React.JS
           )}
         </div>
 
-        {/* Branch selector + launch */}
+        {/* Branch + name + launch */}
         {selected && (
           <div className="px-4 py-3 border-t border-claude-border space-y-3 shrink-0">
             <div className="flex items-center gap-2">
@@ -132,9 +163,27 @@ export default function NewSessionDialog({ onClose, onLaunch }: Props): React.JS
                 {branches.length === 0 && <option value="main">main</option>}
               </select>
             </div>
+
+            <div className="flex flex-col gap-1">
+              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${nameError ? 'border-red-500/60 bg-red-950/10' : 'border-claude-border bg-claude-hover'}`}>
+                <Tag size={13} className="text-claude-muted shrink-0" />
+                <input
+                  type="text"
+                  placeholder="session_name (e.g. feat_user_auth)"
+                  value={sessionName}
+                  onChange={e => { setSessionName(e.target.value); setNameError('') }}
+                  onBlur={() => setNameError(validateName(sessionName))}
+                  className="bg-transparent text-sm text-claude-text placeholder-claude-muted outline-none flex-1 font-mono"
+                />
+              </div>
+              {nameError && <p className="text-xs text-red-400 pl-1">{nameError}</p>}
+            </div>
+
+            {launchError && <p className="text-xs text-red-400">{launchError}</p>}
+
             <button
               onClick={handleLaunch}
-              disabled={launching}
+              disabled={launching || !sessionName.trim()}
               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-claude-orange text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {launching ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}

@@ -1,7 +1,9 @@
 import http from 'http'
+import { basename } from 'path'
 import { BrowserWindow } from 'electron'
 import { sessionDb } from './Database'
-import { markSessionActive, markSessionCompleted, forceProcessSession } from './FileWatcher'
+import { markSessionCompleted, refreshSession, consumePendingLaunch } from './FileWatcher'
+import { renameTerminal } from './TerminalService'
 
 let server: http.Server | null = null
 
@@ -59,18 +61,61 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
   switch (hookEvent) {
     case 'SessionStart': {
       if (sessionId) {
-        markSessionActive(sessionId)
-        const tryNotifyStart = (attempts = 0) => {
-          const session = sessionDb.getById(sessionId)
-          if (session) {
-            win.webContents.send('event:sessionStarted', session)
-          } else if (attempts < 10) {
-            setTimeout(() => {
-              forceProcessSession(sessionId, win).then(() => tryNotifyStart(attempts + 1))
-            }, 500)
+        // Claude Code sends cwd in the hook payload — use it to find the pending launch
+        // without waiting for the JSONL file (which may not exist yet at session start).
+        const cwd = event.cwd as string | undefined
+        console.log(`[HooksServer] SessionStart session=${sessionId} cwd=${cwd}`)
+
+        const pending = cwd ? consumePendingLaunch(cwd) : undefined
+
+        if (pending) {
+          // App-launched session: create the real session in DB immediately from hook data
+          console.log(`[HooksServer] Matched pending launch ${pending.launchId} → ${sessionId}`)
+          const projectName = cwd ? basename(cwd) : sessionId
+          const realSession = {
+            id: sessionId,
+            projectPath: cwd ?? '',
+            projectName,
+            transcriptPath: '',
+            startedAt: new Date().toISOString(),
+            model: 'claude-opus-4-5',
+            status: 'active' as const,
+            totalCostUsd: 0,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            messageCount: 0,
+            title: pending.name,
+            tags: [],
+            source: 'app' as const
+          }
+          sessionDb.upsert(realSession)
+
+          // Remove provisional session
+          sessionDb.delete(pending.launchId)
+          console.log(`[HooksServer] Deleted provisional session id=${pending.launchId}`)
+
+          // Rename PTY so terminal stays connected
+          renameTerminal(pending.launchId, sessionId)
+          console.log(`[HooksServer] Renamed terminal ${pending.launchId} → ${sessionId}`)
+
+          // Notify renderer: swap provisional → real, link terminal, select session
+          win.webContents.send('event:sessionReplaced', {
+            launchId: pending.launchId,
+            sessionId,
+            session: realSession
+          })
+          win.webContents.send('event:terminalLinked', { launchId: pending.launchId, sessionId })
+          win.webContents.send('event:sessionStarted', realSession)
+        } else {
+          // Session not launched from app (or cwd missing) — check if already in DB
+          console.warn(`[HooksServer] No pending launch for cwd=${cwd} — session ${sessionId} may be external`)
+          const existing = sessionDb.getById(sessionId)
+          if (existing) {
+            sessionDb.updateStatus(sessionId, 'active')
+            const updated = sessionDb.getById(sessionId)
+            if (updated) win.webContents.send('event:sessionStarted', updated)
           }
         }
-        tryNotifyStart()
       }
       break
     }
@@ -79,17 +124,12 @@ function handleHookEvent(event: Record<string, unknown>, win: BrowserWindow): vo
     case 'SessionEnd': {
       if (sessionId) {
         markSessionCompleted(sessionId)
-        const tryNotifyStop = (attempts = 0) => {
+        refreshSession(sessionId, win).then(() => {
           const session = sessionDb.getById(sessionId)
           if (session) {
             win.webContents.send('event:sessionUpdated', session)
-          } else if (attempts < 10) {
-            setTimeout(() => {
-              forceProcessSession(sessionId, win).then(() => tryNotifyStop(attempts + 1))
-            }, 500)
           }
-        }
-        tryNotifyStop()
+        })
       }
       break
     }

@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { sessionDb, messageDb, projectDb, settingsDb } from '../services/Database'
 import { areHooksInstalled, installHooks, uninstallHooks } from '../setup/claudeHooks'
 import { isHooksServerRunning } from '../services/HooksServer'
@@ -8,7 +8,9 @@ import {
 } from '../services/TerminalService'
 import { spawn, ChildProcess, exec } from 'child_process'
 import { promisify } from 'util'
+import { basename } from 'path'
 import which from 'which'
+import { registerPendingLaunch } from '../services/FileWatcher'
 
 const execAsync = promisify(exec)
 
@@ -152,8 +154,62 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
+  ipcMain.handle('sessions:launchNew', async (_e, opts: {
+    projectPath: string
+    branch: string
+    name: string
+  }) => {
+    try {
+      // Checkout requested branch
+      if (opts.branch) {
+        try {
+          await execAsync(`git checkout "${opts.branch}"`, { cwd: opts.projectPath })
+          console.log(`[sessions:launchNew] Checked out branch: ${opts.branch}`)
+        } catch (e) {
+          // Branch checkout failure is non-fatal — continue with current branch
+          console.warn(`[sessions:launchNew] Branch checkout failed (non-fatal):`, e)
+        }
+      }
+
+      const launchId = `launch-${Date.now()}`
+      console.log(`[sessions:launchNew] Registering pending launch id=${launchId} project=${opts.projectPath} name=${opts.name}`)
+
+      // Register pending launch so HooksServer can link the terminal when SessionStart fires.
+      registerPendingLaunch(opts.projectPath, launchId, opts.name)
+
+      // Insert provisional session in DB immediately so it appears in the sidebar.
+      // transcriptPath is empty — will be filled when FileWatcher picks up the JSONL.
+      const now = new Date().toISOString()
+      const projectName = basename(opts.projectPath)
+      const provisionalSession = {
+        id: launchId,
+        projectPath: opts.projectPath,
+        projectName,
+        transcriptPath: '',
+        startedAt: now,
+        model: 'claude-opus-4-5',
+        status: 'active' as const,
+        totalCostUsd: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        messageCount: 0,
+        title: opts.name,
+        tags: [],
+        source: 'app' as const
+      }
+      sessionDb.upsert(provisionalSession)
+      win.webContents.send('event:newSession', provisionalSession)
+      console.log(`[sessions:launchNew] Provisional session created id=${launchId}`)
+
+      return { success: true, launchId }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
   // ─── Terminal handlers ───────────────────────────────────────────────────
   ipcMain.handle('terminal:create', (_e, sessionId: string, cwd: string) => {
+    console.log(`[IPC] terminal:create id=${sessionId} cwd=${cwd}`)
     const ok = createTerminal(sessionId, cwd, win)
     return { success: ok }
   })
@@ -167,6 +223,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   ipcMain.handle('terminal:kill', (_e, sessionId: string) => {
+    console.log(`[IPC] terminal:kill id=${sessionId}`)
     killTerminal(sessionId)
   })
 
@@ -197,6 +254,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('git:findRepos', (_e, baseDir: string) => {
     return findGitRepos(baseDir)
+  })
+
+  ipcMain.handle('dialog:openFolder', async (_e, defaultPath?: string) => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      defaultPath: defaultPath || process.env.HOME || '/'
+    })
+    return result.canceled ? null : result.filePaths[0]
   })
 
   ipcMain.handle('git:reviewWithClaude', async (_e, opts: {

@@ -36,6 +36,7 @@ function initSchema(db: Database.Database): void {
       message_count INTEGER NOT NULL DEFAULT 0,
       title TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
+      source TEXT NOT NULL DEFAULT 'app',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -67,6 +68,12 @@ function initSchema(db: Database.Database): void {
     );
   `)
 
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'app'`)
+  } catch {
+    // Column already exists — safe to ignore
+  }
+
   const existingSettings = db.prepare('SELECT key FROM settings WHERE key = ?').get('app_settings')
   if (!existingSettings) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(
@@ -83,11 +90,11 @@ export const sessionDb = {
       INSERT INTO sessions (
         id, project_path, project_name, transcript_path, started_at, ended_at,
         model, status, total_cost_usd, total_input_tokens, total_output_tokens,
-        message_count, title, tags
+        message_count, title, tags, source
       ) VALUES (
         @id, @projectPath, @projectName, @transcriptPath, @startedAt, @endedAt,
         @model, @status, @totalCostUsd, @totalInputTokens, @totalOutputTokens,
-        @messageCount, @title, @tags
+        @messageCount, @title, @tags, @source
       )
       ON CONFLICT(id) DO UPDATE SET
         ended_at = @endedAt,
@@ -96,7 +103,7 @@ export const sessionDb = {
         total_input_tokens = @totalInputTokens,
         total_output_tokens = @totalOutputTokens,
         message_count = @messageCount,
-        title = @title,
+        title = COALESCE(@title, title),
         tags = @tags
     `).run({
       id: session.id,
@@ -112,7 +119,8 @@ export const sessionDb = {
       totalOutputTokens: session.totalOutputTokens ?? null,
       messageCount: session.messageCount,
       title: session.title ?? null,
-      tags: JSON.stringify(session.tags)
+      tags: JSON.stringify(session.tags),
+      source: session.source ?? 'app'
     })
 
     db.prepare(`
@@ -133,7 +141,7 @@ export const sessionDb = {
 
   list(): Session[] {
     const db = getDb()
-    const rows = db.prepare('SELECT * FROM sessions ORDER BY started_at DESC').all() as Record<string, unknown>[]
+    const rows = db.prepare("SELECT * FROM sessions WHERE source = 'app' ORDER BY started_at DESC").all() as Record<string, unknown>[]
     return rows.map(rowToSession)
   },
 
@@ -269,7 +277,8 @@ function rowToSession(row: Record<string, unknown>): Session {
     totalOutputTokens: (row.total_output_tokens as number | null) ?? undefined,
     messageCount: row.message_count as number,
     title: (row.title as string | null) ?? undefined,
-    tags: (() => { try { return JSON.parse((row.tags as string) || '[]') } catch { return [] } })()
+    tags: (() => { try { return JSON.parse((row.tags as string) || '[]') } catch { return [] } })(),
+    source: (row.source as Session['source']) ?? 'app'
   }
 }
 
