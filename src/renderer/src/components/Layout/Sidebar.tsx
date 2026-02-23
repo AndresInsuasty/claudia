@@ -188,10 +188,6 @@ export default function Sidebar(): React.JSX.Element {
             </div>
           )}
         </div>
-
-        <div className="px-3 py-2 border-t border-claude-border">
-          <div className="text-xs text-claude-muted text-center">Claudia</div>
-        </div>
       </div>
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}

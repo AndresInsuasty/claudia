@@ -200,11 +200,19 @@ export default function MainPanel(): React.JSX.Element {
     : <SessionView session={session} />
 
   return (
-    <div className="flex-1 flex flex-row overflow-hidden">
-      <div className={`flex flex-col overflow-hidden ${isTerminalVisible ? 'w-[55%]' : 'flex-1'}`}>
-        {content}
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Global App Header */}
+      <div className="drag-region h-12 flex items-center justify-center border-b border-claude-border bg-claude-panel shrink-0">
+        <span className="text-sm font-semibold text-claude-text">Claudia</span>
       </div>
-      <GlobalTerminalPanel />
+      
+      {/* Main content area with terminal */}
+      <div className="flex-1 flex flex-row overflow-hidden">
+        <div className={`flex flex-col overflow-hidden ${isTerminalVisible ? 'w-[55%]' : 'flex-1'}`}>
+          {content}
+        </div>
+        <GlobalTerminalPanel />
+      </div>
     </div>
   )
 }
