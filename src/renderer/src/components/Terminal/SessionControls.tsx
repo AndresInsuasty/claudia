@@ -66,8 +66,8 @@ export default function SessionControls({ session, onResume, onRollback }: Props
         <span className="text-xs text-green-400 ml-2">{rollbackMsg}</span>
       )}
 
-      <span className="ml-auto text-xs text-claude-muted font-mono truncate max-w-xs" title={session.id}>
-        {session.id.slice(0, 16)}…
+      <span className="ml-auto text-xs text-claude-muted font-mono" title={session.id}>
+        {session.id}
       </span>
     </div>
   )

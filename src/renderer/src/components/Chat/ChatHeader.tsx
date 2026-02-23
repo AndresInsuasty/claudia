@@ -32,7 +32,7 @@ export default function ChatHeader({ session }: Props): React.JSX.Element {
 
   return (
     <div className="drag-region flex items-center gap-3 px-4 py-3 border-b border-claude-border bg-claude-panel">
-      <div className="no-drag flex-1 flex items-center gap-2 min-w-0 pl-16">
+      <div className="no-drag flex-1 flex items-center gap-2 min-w-0 pl-4">
         {editing ? (
           <>
             <input
