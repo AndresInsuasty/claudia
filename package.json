@@ -86,6 +86,11 @@
     ],
     "directories": {
       "output": "dist"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "gabrielcoralc",
+      "repo": "claudia"
     }
   }
 }

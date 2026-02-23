@@ -7,6 +7,7 @@ import { startFileWatcher, stopFileWatcher } from './services/FileWatcher'
 import { startHooksServer, stopHooksServer } from './services/HooksServer'
 import { closeDb, settingsDb } from './services/Database'
 import { installHooks } from './setup/claudeHooks'
+import { setupAutoUpdater, stopAutoUpdater } from './services/AutoUpdater'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -71,6 +72,9 @@ app.whenReady().then(async () => {
 
   await startFileWatcher(win)
 
+  // Configurar auto-updater
+  setupAutoUpdater(win)
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
@@ -89,5 +93,6 @@ app.on('before-quit', () => {
   killAllTerminals()
   stopFileWatcher()
   stopHooksServer()
+  stopAutoUpdater()
   closeDb()
 })
