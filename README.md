@@ -76,33 +76,70 @@ A beautiful macOS desktop application for managing, tracking, and analyzing your
 2. Open the `.dmg` file
 3. Drag `Claudia.app` to your Applications folder
 
-**⚠️ First Launch Security:**
+---
 
-Since Claudia is open source and not signed with an Apple Developer certificate, macOS Gatekeeper will block the first launch. This is expected behavior for unsigned apps.
+### ⚠️ Important: First Launch Security
 
-**To open Claudia:**
+**You will see this error when opening Claudia:**
 
-**Method 1 - Remove Quarantine (One-time):**
-```bash
-xattr -d com.apple.quarantine /Applications/Claudia.app
+```
+"Claudia.app" is damaged and can't be opened.
+You should move it to the Trash.
 ```
 
-**Method 2 - Right-Click Open:**
-1. Right-click on `Claudia.app`
-2. Click "Open"
-3. Click "Open" again in the security dialog
+**This is NOT a virus or corrupted file!**
 
-**Method 3 - System Settings:**
-1. Try to open Claudia normally (it will be blocked)
-2. Go to System Settings → Privacy & Security
-3. Click "Open Anyway" next to the Claudia message
-4. Click "Open" in the confirmation dialog
+This is macOS Gatekeeper blocking apps without an Apple Developer certificate ($99/year). Since Claudia is open source and free, it's not signed.
 
-**Is it safe?**
-- ✅ **100% Open Source** - All code is auditable on GitHub
-- ✅ **No telemetry** - Your data stays local
-- ✅ **Verified checksums** - Confirm download integrity
-- ✅ **Build from source** - Compile it yourself if preferred
+---
+
+### 🔓 How to Open Claudia (Choose One Method)
+
+#### **✅ Method 1: Remove Quarantine Flag (Recommended)**
+
+Open **Terminal** and paste this command:
+
+```bash
+xattr -cr /Applications/Claudia.app
+```
+
+Then open Claudia normally (double-click). **This only needs to be done once.**
+
+---
+
+#### **Method 2: Right-Click to Open**
+
+1. **Finder** → **Applications**
+2. **Right-click** (or Control+Click) on `Claudia.app`
+3. Select **"Open"** from the menu
+4. Click **"Open"** again in the security dialog
+
+> **Note:** You MUST right-click. Double-clicking won't work.
+
+---
+
+#### **Method 3: System Settings Override**
+
+1. Try to open Claudia (it will be blocked)
+2. Go to **System Settings** → **Privacy & Security**
+3. Scroll down and click **"Open Anyway"** next to the Claudia message
+4. Click **"Open"** to confirm
+
+---
+
+### 🔒 Is Claudia Safe?
+
+- ✅ **100% Open Source** - All code is auditable on [GitHub](https://github.com/gabrielcoralc/claudia)
+- ✅ **No Telemetry** - Your data stays on your Mac
+- ✅ **Verified Checksums** - Every release includes SHA256 checksums
+- ✅ **Build from Source** - You can compile it yourself (see below)
+- ✅ **No Network Access Required** - Works completely offline
+
+**Why isn't it signed?**
+
+Apple Developer certificates cost $99/year. As a free, open-source project, we distribute unsigned builds to keep Claudia free for everyone. The code is fully transparent and auditable.
+
+---
 
 ### Option 2: Homebrew Cask (Coming Soon)
 
