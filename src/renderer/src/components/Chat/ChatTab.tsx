@@ -2,10 +2,23 @@ import React, { useEffect, useRef, useState, useMemo } from 'react'
 import { useSessionStore } from '../../stores/sessionStore'
 import MessageBubble from './MessageBubble'
 import AssistantTurnBubble from './AssistantTurnBubble'
+import QuestionAnswerBubble from './QuestionAnswerBubble'
 import { groupMessages, classifyMessage } from '../../utils/messageGrouper'
 import type { Session, ClaudeMessage } from '../../../../shared/types'
 import type { ClaudeToolUseContent } from '../../../../shared/types'
-import { Search, Wrench, MessageCircle, Square, LogOut, ChevronDown, User, Bot, Brain, FileText, HelpCircle } from 'lucide-react'
+import {
+  Search,
+  Wrench,
+  MessageCircle,
+  Square,
+  LogOut,
+  ChevronDown,
+  User,
+  Bot,
+  Brain,
+  FileText,
+  HelpCircle
+} from 'lucide-react'
 
 type FilterType = 'user' | 'claude' | 'thinking' | 'tools' | 'files' | 'questions' | 'tool_results'
 
@@ -21,53 +34,53 @@ interface FilterOption {
 }
 
 const FILTER_OPTIONS: FilterOption[] = [
-  { 
-    key: 'user', 
-    label: 'User Messages', 
+  {
+    key: 'user',
+    label: 'User Messages',
     icon: <User size={12} className="text-green-400" />,
     description: 'User prompts and inputs'
   },
-  { 
-    key: 'claude', 
-    label: 'Claude Messages', 
+  {
+    key: 'claude',
+    label: 'Claude Messages',
     icon: <Bot size={12} className="text-claude-orange" />,
-    description: 'Claude\'s text responses'
+    description: "Claude's text responses"
   },
-  { 
-    key: 'thinking', 
-    label: 'Thinking Blocks', 
+  {
+    key: 'thinking',
+    label: 'Thinking Blocks',
     icon: <Brain size={12} className="text-purple-400" />,
-    description: 'Claude\'s reasoning process'
+    description: "Claude's reasoning process"
   },
-  { 
-    key: 'tools', 
-    label: 'Tool Usage', 
+  {
+    key: 'tools',
+    label: 'Tool Usage',
     icon: <Wrench size={12} className="text-blue-400" />,
     description: 'All tool invocations'
   },
-  { 
-    key: 'files', 
-    label: 'File Operations', 
+  {
+    key: 'files',
+    label: 'File Operations',
     icon: <FileText size={12} className="text-yellow-400" />,
     description: 'Read, Write, Edit operations'
   },
-  { 
-    key: 'questions', 
-    label: 'Questions', 
+  {
+    key: 'questions',
+    label: 'Questions',
     icon: <HelpCircle size={12} className="text-amber-400" />,
     description: 'Messages containing questions'
   },
-  { 
-    key: 'tool_results', 
-    label: 'Tool Results', 
+  {
+    key: 'tool_results',
+    label: 'Tool Results',
     icon: <Square size={12} className="text-cyan-400" />,
     description: 'Tool execution outputs'
-  },
+  }
 ]
 
 function messageMatchesAnyFilter(msg: ClaudeMessage, activeFilters: Set<FilterType>): boolean {
   if (activeFilters.size === 0) return false
-  
+
   for (const filter of activeFilters) {
     if (filter === 'user') {
       const kind = classifyMessage(msg)
@@ -83,20 +96,26 @@ function messageMatchesAnyFilter(msg: ClaudeMessage, activeFilters: Set<FilterTy
       if (msg.content.some(b => b.type === 'tool_use')) return true
     }
     if (filter === 'files') {
-      if (msg.content.some(b =>
-        b.type === 'tool_use' && ['Read', 'Write', 'Edit', 'MultiEdit'].includes((b as ClaudeToolUseContent).name)
-      )) return true
+      if (
+        msg.content.some(
+          b =>
+            b.type === 'tool_use' && ['Read', 'Write', 'Edit', 'MultiEdit'].includes((b as ClaudeToolUseContent).name)
+        )
+      )
+        return true
     }
     if (filter === 'questions') {
-      if (msg.role === 'assistant' && msg.content.some(b =>
-        b.type === 'text' && (b as { type: 'text'; text: string }).text.includes('?')
-      )) return true
+      if (
+        msg.role === 'assistant' &&
+        msg.content.some(b => b.type === 'text' && (b as { type: 'text'; text: string }).text.includes('?'))
+      )
+        return true
     }
     if (filter === 'tool_results') {
       if (msg.content.some(b => b.type === 'tool_result')) return true
     }
   }
-  
+
   return false
 }
 
@@ -105,7 +124,8 @@ function messageMatchesSearch(msg: ClaudeMessage, query: string): boolean {
   const q = query.toLowerCase()
   return msg.content.some(block => {
     if (block.type === 'text') return (block as { type: 'text'; text: string }).text.toLowerCase().includes(q)
-    if (block.type === 'thinking') return (block as { type: 'thinking'; thinking: string }).thinking.toLowerCase().includes(q)
+    if (block.type === 'thinking')
+      return (block as { type: 'thinking'; thinking: string }).thinking.toLowerCase().includes(q)
     if (block.type === 'tool_use') return (block as ClaudeToolUseContent).name.toLowerCase().includes(q)
     return false
   })
@@ -114,7 +134,10 @@ function messageMatchesSearch(msg: ClaudeMessage, query: string): boolean {
 function activityLabel(type: string, detail?: string): { icon: React.ReactNode; text: string } {
   switch (type) {
     case 'tool_completed':
-      return { icon: <Wrench size={12} className="text-blue-400" />, text: detail ? `Completed ${detail}` : 'Tool completed' }
+      return {
+        icon: <Wrench size={12} className="text-blue-400" />,
+        text: detail ? `Completed ${detail}` : 'Tool completed'
+      }
     case 'user_prompt':
       return { icon: <MessageCircle size={12} className="text-green-400" />, text: 'User prompt submitted' }
     case 'stopped':
@@ -128,12 +151,12 @@ function activityLabel(type: string, detail?: string): { icon: React.ReactNode; 
   }
 }
 
-function FilterDropdown({ 
-  activeFilters, 
-  onToggleFilter 
-}: { 
+function FilterDropdown({
+  activeFilters,
+  onToggleFilter
+}: {
   activeFilters: Set<FilterType>
-  onToggleFilter: (filter: FilterType) => void 
+  onToggleFilter: (filter: FilterType) => void
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -167,7 +190,7 @@ function FilterDropdown({
       {isOpen && (
         <div className="absolute top-full left-0 mt-1 w-64 bg-claude-panel border border-claude-border rounded-lg shadow-xl z-50 overflow-hidden">
           <div className="py-1">
-            {FILTER_OPTIONS.map((option) => {
+            {FILTER_OPTIONS.map(option => {
               const isActive = activeFilters.has(option.key)
               return (
                 <button
@@ -207,9 +230,7 @@ export default function ChatTab({ session }: Props): React.JSX.Element {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
-  const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(
-    new Set(FILTER_OPTIONS.map(f => f.key))
-  )
+  const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(new Set(FILTER_OPTIONS.map(f => f.key)))
   const [search, setSearch] = useState('')
 
   useEffect(() => {
@@ -264,21 +285,12 @@ export default function ChatTab({ session }: Props): React.JSX.Element {
         </div>
 
         <div className="flex items-center gap-2">
-          <FilterDropdown 
-            activeFilters={activeFilters} 
-            onToggleFilter={handleToggleFilter} 
-          />
-          <span className="ml-auto text-xs text-claude-muted">
-            {sessionMessages.length} messages
-          </span>
+          <FilterDropdown activeFilters={activeFilters} onToggleFilter={handleToggleFilter} />
+          <span className="ml-auto text-xs text-claude-muted">{sessionMessages.length} messages</span>
         </div>
       </div>
 
-      <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 relative"
-      >
+      <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 relative">
         {turns.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-claude-muted text-sm">
@@ -290,12 +302,10 @@ export default function ChatTab({ session }: Props): React.JSX.Element {
             if (turn.kind === 'user') {
               return <MessageBubble key={turn.message.id || idx} message={turn.message} />
             }
-            return (
-              <AssistantTurnBubble
-                key={turn.messages[0]?.id || idx}
-                turn={turn}
-              />
-            )
+            if (turn.kind === 'question_answer') {
+              return <QuestionAnswerBubble key={`qa-${idx}`} turn={turn} />
+            }
+            return <AssistantTurnBubble key={turn.messages[0]?.id || idx} turn={turn} />
           })
         )}
         <div ref={bottomRef} />
@@ -317,9 +327,7 @@ export default function ChatTab({ session }: Props): React.JSX.Element {
         <div className="shrink-0 px-4 py-2 border-t border-claude-border bg-claude-sidebar flex items-center gap-2 animate-fade-in">
           <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
           {activityLabel(activity.type, activity.detail).icon}
-          <span className="text-xs text-claude-muted">
-            {activityLabel(activity.type, activity.detail).text}
-          </span>
+          <span className="text-xs text-claude-muted">{activityLabel(activity.type, activity.detail).text}</span>
         </div>
       )}
     </div>

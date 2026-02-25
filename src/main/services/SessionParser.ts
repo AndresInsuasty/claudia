@@ -54,7 +54,9 @@ export function getClaudeProjectsDir(): string {
   return path.join(home, '.claude', 'projects')
 }
 
-export async function readFirstEntry(transcriptPath: string): Promise<import('../../shared/types').TranscriptEntry | null> {
+export async function readFirstEntry(
+  transcriptPath: string
+): Promise<import('../../shared/types').TranscriptEntry | null> {
   if (!fs.existsSync(transcriptPath)) return null
   const fileStream = fs.createReadStream(transcriptPath)
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity })
@@ -69,7 +71,9 @@ export async function readFirstEntry(transcriptPath: string): Promise<import('..
         fileStream.destroy()
         return entry
       }
-    } catch { /* ignore malformed lines */ }
+    } catch {
+      /* ignore malformed lines */
+    }
   }
   return null
 }
@@ -87,12 +91,14 @@ function transformAskUserQuestion(content: ClaudeMessage['content']): ClaudeMess
     if (toolBlock.name !== 'AskUserQuestion') return block
 
     const input = toolBlock.input || {}
-    const questions = input.questions as Array<{
-      question?: string
-      header?: string
-      multiSelect?: boolean
-      options?: Array<{ label?: string; description?: string }>
-    }> | undefined
+    const questions = input.questions as
+      | Array<{
+          question?: string
+          header?: string
+          multiSelect?: boolean
+          options?: Array<{ label?: string; description?: string }>
+        }>
+      | undefined
 
     if (!questions || !Array.isArray(questions)) return block
 
@@ -154,15 +160,12 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
         if (!entry.message) continue
         const msg = entry.message
 
-        // Skip system-injected user messages from Claude Code slash commands (e.g. /exit, /status)
+        // Preserve command messages (e.g. /meli.start) — they are rendered as
+        // compact badges in the UI via commandDetector. Only skip local-command
+        // entries that carry no useful command name (raw stdout, XML wrappers).
         if (entry.type === 'user' && typeof msg.content === 'string') {
           const s = msg.content as string
-          if (
-            s.startsWith('<local-command') ||
-            s.startsWith('<command-name>') ||
-            s.startsWith('<command-message>') ||
-            s.startsWith('<local-command-stdout>')
-          ) continue
+          if (s.startsWith('<local-command') || s.startsWith('<local-command-stdout>')) continue
         }
 
         if (msg.model) model = msg.model
@@ -186,6 +189,23 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
 
         // Transform AskUserQuestion tool_use into a readable question text block
         content = transformAskUserQuestion(content)
+
+        // Attach toolUseResult (e.g. AskUserQuestion answers) to tool_result blocks
+        if (entry.toolUseResult) {
+          try {
+            const parsed =
+              typeof entry.toolUseResult === 'string' ? JSON.parse(entry.toolUseResult) : entry.toolUseResult
+            if (parsed && typeof parsed === 'object' && 'answers' in parsed) {
+              for (const block of content) {
+                if (block.type === 'tool_result') {
+                  ;(block as import('../../shared/types').ClaudeToolResultContent).toolUseResult = parsed
+                }
+              }
+            }
+          } catch {
+            /* ignore malformed toolUseResult */
+          }
+        }
 
         for (const block of content) {
           if (block.type === 'tool_use') toolCallCount++
@@ -211,8 +231,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
       } else if (entry.type === 'result') {
         if (entry.costUsd) totalCostUsd = entry.costUsd
       }
-    } catch {
-    }
+    } catch {}
   }
 
   return {
