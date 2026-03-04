@@ -450,37 +450,13 @@ export async function refreshSession(sessionId: string): Promise<void> {
     return
   }
 
-  // Session not in watchedFiles — find its transcript and register it
-  // with the current raw line count so onFileChanged only sends NEW messages.
+  // Session not in watchedFiles — do a full parse via processNewTranscript
+  // so all existing messages are inserted into the DB (not just counted).
   const found = await scanClaudeProjects()
   const target = found.find(f => f.sessionId === sessionId)
   if (!target) return
 
-  const stat = fs.existsSync(target.transcriptPath) ? fs.statSync(target.transcriptPath) : null
-
-  // Prefer cwd from JSONL; fall back to encoded path
-  const firstEntry = await readFirstEntry(target.transcriptPath)
-  const projectPath = firstEntry?.cwd || target.projectPath
-
-  // Count raw lines in the transcript so incremental parsing starts from the right position
-  const { rawLineCount: existingRawLines } = await parseTranscriptFile(target.transcriptPath)
-
-  watchedFiles.set(target.transcriptPath, {
-    sessionId,
-    projectPath,
-    projectName: existingSession?.projectName ?? deriveProjectName(projectPath),
-    transcriptPath: target.transcriptPath,
-    lastSize: stat ? stat.size : 0,
-    lastLineCount: existingRawLines,
-    lastCostUsd: existingSession?.totalCostUsd ?? 0,
-    lastInputTokens: existingSession?.totalInputTokens ?? 0,
-    lastOutputTokens: existingSession?.totalOutputTokens ?? 0,
-    lastCacheReadTokens: existingSession?.cacheReadTokens ?? 0,
-    lastCacheCreationTokens: existingSession?.cacheCreationTokens ?? 0
-  })
-
-  // Now call onFileChanged which will only send messages after lastLineCount
-  await onFileChanged(target.transcriptPath)
+  await processNewTranscript(target.sessionId, target.projectPath, target.transcriptPath)
 }
 
 export async function forceProcessSession(sessionId: string): Promise<void> {
