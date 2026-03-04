@@ -2,18 +2,7 @@ import fs from 'fs'
 import readline from 'readline'
 import type { Session, ClaudeMessage, TranscriptEntry, SessionCostSummary } from '../../shared/types'
 import path from 'path'
-
-const CLAUDE_COST_PER_M_INPUT = 15.0
-const CLAUDE_COST_PER_M_OUTPUT = 75.0
-const SONNET_COST_PER_M_INPUT = 3.0
-const SONNET_COST_PER_M_OUTPUT = 15.0
-
-function getCostForModel(model: string, inputTokens: number, outputTokens: number): number {
-  const isOpus = model.includes('opus')
-  const perMInput = isOpus ? CLAUDE_COST_PER_M_INPUT : SONNET_COST_PER_M_INPUT
-  const perMOutput = isOpus ? CLAUDE_COST_PER_M_OUTPUT : SONNET_COST_PER_M_OUTPUT
-  return (inputTokens / 1_000_000) * perMInput + (outputTokens / 1_000_000) * perMOutput
-}
+import { getPricingService } from './PricingService'
 
 export function decodeProjectPath(encodedPath: string): string {
   // Claude Code encodes project paths by replacing '/' with '-'
@@ -173,11 +162,17 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
         if (msg.usage) {
           const inputT = msg.usage.input_tokens ?? 0
           const outputT = msg.usage.output_tokens ?? 0
+          const cacheCreationT = msg.usage.cache_creation_input_tokens ?? 0
+          const cacheReadT = msg.usage.cache_read_input_tokens ?? 0
+
           totalInputTokens += inputT
           totalOutputTokens += outputT
-          cacheReadTokens += msg.usage.cache_read_input_tokens ?? 0
-          cacheCreationTokens += msg.usage.cache_creation_input_tokens ?? 0
-          totalCostUsd += getCostForModel(model, inputT, outputT)
+          cacheReadTokens += cacheReadT
+          cacheCreationTokens += cacheCreationT
+
+          // Use PricingService for accurate cost calculation including cache tokens
+          const pricingService = getPricingService()
+          totalCostUsd += pricingService.calculateCost(model, inputT, outputT, cacheCreationT, cacheReadT)
         }
 
         // Handle both array and string content formats

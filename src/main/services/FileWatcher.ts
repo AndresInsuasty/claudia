@@ -1,8 +1,9 @@
 import chokidar from 'chokidar'
 import fs from 'fs'
 import path from 'path'
+import readline from 'readline'
 import { BrowserWindow } from 'electron'
-import type { ClaudeMessage, Session } from '../../shared/types'
+import type { ClaudeMessage, Session, TranscriptEntry } from '../../shared/types'
 import { sessionDb, messageDb, dailyMetricsDb } from './Database'
 import { deriveProjectName } from './SessionParser'
 import {
@@ -11,8 +12,10 @@ import {
   getClaudeProjectsDir,
   decodeProjectPath,
   scanClaudeProjects,
-  readFirstEntry
+  readFirstEntry,
+  parseStreamJsonLine
 } from './SessionParser'
+import { getPricingService } from './PricingService'
 
 interface WatchedFile {
   sessionId: string
@@ -24,6 +27,8 @@ interface WatchedFile {
   lastCostUsd: number
   lastInputTokens: number
   lastOutputTokens: number
+  lastCacheReadTokens?: number
+  lastCacheCreationTokens?: number
 }
 
 const watchedFiles = new Map<string, WatchedFile>()
@@ -72,9 +77,9 @@ export async function startFileWatcher(win: BrowserWindow): Promise<void> {
   })
 
   watcher
-    .on('add', (filePath) => onFileAdded(filePath, win))
-    .on('change', (filePath) => onFileChanged(filePath, win))
-    .on('error', (err) => console.error('[FileWatcher] Error:', err))
+    .on('add', filePath => onFileAdded(filePath, win))
+    .on('change', filePath => onFileChanged(filePath, win))
+    .on('error', err => console.error('[FileWatcher] Error:', err))
 
   console.log('[FileWatcher] Watching:', projectsDir)
 }
@@ -107,7 +112,9 @@ async function importExistingSessions(win: BrowserWindow): Promise<void> {
         lastLineCount: existingMsgs.length,
         lastCostUsd: existing.totalCostUsd ?? 0,
         lastInputTokens: existing.totalInputTokens ?? 0,
-        lastOutputTokens: existing.totalOutputTokens ?? 0
+        lastOutputTokens: existing.totalOutputTokens ?? 0,
+        lastCacheReadTokens: existing.cacheReadTokens ?? 0,
+        lastCacheCreationTokens: existing.cacheCreationTokens ?? 0
       })
       continue
     }
@@ -132,6 +139,124 @@ async function onFileAdded(filePath: string, win: BrowserWindow): Promise<void> 
   await processNewTranscript(sessionId, projectPath, filePath, win)
 }
 
+/**
+ * Parse only new lines from a transcript file (incremental parsing)
+ * This avoids re-calculating costs with updated pricing for old messages
+ */
+async function parseNewLinesOnly(
+  filePath: string,
+  startLineIndex: number
+): Promise<{
+  newMessages: ClaudeMessage[]
+  deltaCost: number
+  deltaInput: number
+  deltaOutput: number
+  deltaCacheRead: number
+  deltaCacheCreation: number
+  model: string
+}> {
+  const newMessages: ClaudeMessage[] = []
+  let deltaInput = 0
+  let deltaOutput = 0
+  let deltaCacheRead = 0
+  let deltaCacheCreation = 0
+  let deltaCost = 0
+  let model = ''
+
+  if (!fs.existsSync(filePath)) {
+    return { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, model }
+  }
+
+  const fileStream = fs.createReadStream(filePath)
+  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity })
+
+  let lineIndex = 0
+  const pricingService = getPricingService()
+
+  for await (const line of rl) {
+    // Skip lines we've already processed
+    if (lineIndex < startLineIndex) {
+      lineIndex++
+      continue
+    }
+
+    if (!line.trim()) {
+      lineIndex++
+      continue
+    }
+
+    try {
+      const entry: TranscriptEntry = JSON.parse(line)
+
+      // Skip non-conversation entries
+      if (entry.type === 'progress' || entry.type === 'file-history-snapshot') {
+        lineIndex++
+        continue
+      }
+
+      if (entry.type === 'user' || entry.type === 'assistant') {
+        if (!entry.message) {
+          lineIndex++
+          continue
+        }
+
+        const msg = entry.message
+
+        // Skip local-command XML wrappers
+        if (entry.type === 'user' && typeof msg.content === 'string') {
+          const s = msg.content as string
+          if (s.startsWith('<local-command') || s.startsWith('<local-command-stdout>')) {
+            lineIndex++
+            continue
+          }
+        }
+
+        if (msg.model) model = msg.model
+
+        // Calculate incremental cost for this message
+        if (msg.usage) {
+          const inputT = msg.usage.input_tokens ?? 0
+          const outputT = msg.usage.output_tokens ?? 0
+          const cacheCreationT = msg.usage.cache_creation_input_tokens ?? 0
+          const cacheReadT = msg.usage.cache_read_input_tokens ?? 0
+
+          deltaInput += inputT
+          deltaOutput += outputT
+          deltaCacheRead += cacheReadT
+          deltaCacheCreation += cacheCreationT
+
+          // Calculate cost using current pricing
+          deltaCost += pricingService.calculateCost(model, inputT, outputT, cacheCreationT, cacheReadT)
+        }
+
+        // Build message content
+        const content: ClaudeMessage['content'] = Array.isArray(msg.content)
+          ? (msg.content as ClaudeMessage['content'])
+          : typeof msg.content === 'string' && msg.content.trim()
+            ? [{ type: 'text', text: msg.content as string }]
+            : []
+
+        const message: ClaudeMessage = {
+          id: entry.uuid || msg.id || `${entry.type}-${Date.now()}-${Math.random()}`,
+          sessionId: '',
+          role: msg.role,
+          content,
+          timestamp: entry.timestamp || new Date().toISOString(),
+          permissionMode: entry.permissionMode || undefined,
+          usage: msg.usage
+        }
+        newMessages.push(message)
+      }
+    } catch {
+      // Ignore malformed lines
+    }
+
+    lineIndex++
+  }
+
+  return { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, model }
+}
+
 async function onFileChanged(filePath: string, win: BrowserWindow): Promise<void> {
   if (!filePath.endsWith('.jsonl')) return
 
@@ -148,9 +273,11 @@ async function onFileChanged(filePath: string, win: BrowserWindow): Promise<void
     return
   }
 
-  const { messages, costSummary } = await parseTranscriptFile(filePath)
-  const newMessages = messages.slice(watched.lastLineCount)
+  // Parse only NEW lines (incremental) to preserve historical pricing
+  const { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation } =
+    await parseNewLinesOnly(filePath, watched.lastLineCount)
 
+  // Insert new messages
   for (const msg of newMessages) {
     const fullMsg: ClaudeMessage = { ...msg, sessionId: watched.sessionId }
     messageDb.insert(fullMsg)
@@ -158,32 +285,45 @@ async function onFileChanged(filePath: string, win: BrowserWindow): Promise<void
     sessionDb.incrementMessageCount(watched.sessionId)
   }
 
-  if (costSummary.totalCostUsd !== undefined) {
-    // Calculate delta and store in daily metrics
-    const deltaCost = (costSummary.totalCostUsd ?? 0) - watched.lastCostUsd
-    const deltaInput = (costSummary.totalInputTokens ?? 0) - watched.lastInputTokens
-    const deltaOutput = (costSummary.totalOutputTokens ?? 0) - watched.lastOutputTokens
-    const deltaMessages = newMessages.length
+  // Update costs incrementally (add to existing totals)
+  if (deltaCost > 0 || deltaInput > 0 || deltaOutput > 0) {
+    const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 
-    if (deltaCost > 0 || deltaInput > 0 || deltaOutput > 0 || deltaMessages > 0) {
-      const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-      dailyMetricsDb.addDelta(watched.sessionId, today, watched.projectPath, watched.projectName, {
-        costUsd: deltaCost,
-        inputTokens: deltaInput,
-        outputTokens: deltaOutput,
-        messageCount: deltaMessages
-      })
-    }
+    // Store daily delta
+    dailyMetricsDb.addDelta(watched.sessionId, today, watched.projectPath, watched.projectName, {
+      costUsd: deltaCost,
+      inputTokens: deltaInput,
+      outputTokens: deltaOutput,
+      messageCount: newMessages.length
+    })
 
-    sessionDb.updateCost(watched.sessionId, costSummary)
+    // Update session totals (incremental)
+    const newTotalCost = watched.lastCostUsd + deltaCost
+    const newTotalInput = watched.lastInputTokens + deltaInput
+    const newTotalOutput = watched.lastOutputTokens + deltaOutput
+    const newTotalCacheRead = (watched.lastCacheReadTokens ?? 0) + deltaCacheRead
+    const newTotalCacheCreation = (watched.lastCacheCreationTokens ?? 0) + deltaCacheCreation
+
+    sessionDb.updateCost(watched.sessionId, {
+      totalCostUsd: newTotalCost,
+      totalInputTokens: newTotalInput,
+      totalOutputTokens: newTotalOutput,
+      cacheReadTokens: newTotalCacheRead,
+      cacheCreationTokens: newTotalCacheCreation,
+      messageCount: sessionExists.messageCount + newMessages.length,
+      toolCallCount: 0,
+      durationMs: 0
+    })
 
     // Update tracked totals for next delta
-    watched.lastCostUsd = costSummary.totalCostUsd ?? 0
-    watched.lastInputTokens = costSummary.totalInputTokens ?? 0
-    watched.lastOutputTokens = costSummary.totalOutputTokens ?? 0
+    watched.lastCostUsd = newTotalCost
+    watched.lastInputTokens = newTotalInput
+    watched.lastOutputTokens = newTotalOutput
+    watched.lastCacheReadTokens = newTotalCacheRead
+    watched.lastCacheCreationTokens = newTotalCacheCreation
   }
 
-  watched.lastLineCount = messages.length
+  watched.lastLineCount += newMessages.length
   watched.lastSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
 
   const updatedSession = sessionDb.getById(watched.sessionId)
@@ -218,7 +358,7 @@ async function processNewTranscript(
 
   // If session already exists, use null to preserve existing title via COALESCE
   // Otherwise derive title from pending name or first message
-  const title = pending ? pending.name : (alreadyExists ? null : deriveSessionTitle(messages))
+  const title = pending ? pending.name : alreadyExists ? null : deriveSessionTitle(messages)
 
   const stat = fs.existsSync(transcriptPath) ? fs.statSync(transcriptPath) : null
 
@@ -271,7 +411,9 @@ async function processNewTranscript(
     lastLineCount: messages.length,
     lastCostUsd: costSummary.totalCostUsd ?? 0,
     lastInputTokens: costSummary.totalInputTokens ?? 0,
-    lastOutputTokens: costSummary.totalOutputTokens ?? 0
+    lastOutputTokens: costSummary.totalOutputTokens ?? 0,
+    lastCacheReadTokens: costSummary.cacheReadTokens ?? 0,
+    lastCacheCreationTokens: costSummary.cacheCreationTokens ?? 0
   })
 
   // If session was already in the sidebar (created by HooksServer), update it; otherwise add it
@@ -283,10 +425,7 @@ async function processNewTranscript(
   }
 }
 
-export async function refreshSession(
-  sessionId: string,
-  win: BrowserWindow
-): Promise<void> {
+export async function refreshSession(sessionId: string, win: BrowserWindow): Promise<void> {
   // Verify session exists in DB before processing (prevents FOREIGN KEY errors for external sessions)
   const existingSession = sessionDb.getById(sessionId)
   if (!existingSession) {
@@ -323,17 +462,16 @@ export async function refreshSession(
     lastLineCount: existingMsgCount,
     lastCostUsd: existingSession?.totalCostUsd ?? 0,
     lastInputTokens: existingSession?.totalInputTokens ?? 0,
-    lastOutputTokens: existingSession?.totalOutputTokens ?? 0
+    lastOutputTokens: existingSession?.totalOutputTokens ?? 0,
+    lastCacheReadTokens: existingSession?.cacheReadTokens ?? 0,
+    lastCacheCreationTokens: existingSession?.cacheCreationTokens ?? 0
   })
 
   // Now call onFileChanged which will only send messages after lastLineCount
   await onFileChanged(target.transcriptPath, win)
 }
 
-export async function forceProcessSession(
-  sessionId: string,
-  win: BrowserWindow
-): Promise<void> {
+export async function forceProcessSession(sessionId: string, win: BrowserWindow): Promise<void> {
   if (watchedFiles.has(sessionId)) return
 
   const found = await scanClaudeProjects()

@@ -83,7 +83,9 @@ export function killTerminal(sessionId: string): void {
   const inst = terminals.get(sessionId)
   if (inst) {
     console.log(`[TerminalService] killTerminal id=${sessionId}`)
-    try { inst.proc.kill() } catch (e) {
+    try {
+      inst.proc.kill()
+    } catch (e) {
       console.error(`[TerminalService] killTerminal error for id=${sessionId}:`, e)
     }
     terminals.delete(sessionId)
@@ -180,10 +182,20 @@ export async function stashChanges(projectPath: string): Promise<{ success: bool
 
 export async function getBranches(projectPath: string): Promise<string[]> {
   try {
-    const { stdout } = await execAsync('git branch --list', { cwd: projectPath })
-    return stdout.split('\n')
-      .map(b => b.replace(/^\*?\s+/, '').trim())
-      .filter(Boolean)
+    // Detectar TODAS las ramas (locales + remotas)
+    const { stdout } = await execAsync("git branch -a --format='%(refname:short)'", { cwd: projectPath })
+
+    return (
+      stdout
+        .split('\n')
+        .map(b => b.trim())
+        .filter(Boolean)
+        // Normalizar: remover prefijo remotes/origin/
+        .map(b => b.replace(/^(remotes\/)?origin\//, ''))
+        // Deduplicar (main y origin/main → solo main)
+        .filter((branch, index, self) => self.indexOf(branch) === index)
+        .sort()
+    )
   } catch {
     return []
   }
@@ -205,7 +217,8 @@ export async function findGitRepos(baseDir: string, maxDepth = 5): Promise<strin
     const { stdout } = await execAsync(
       `find "${resolvedDir}" -maxdepth ${maxDepth} -name ".git" -type d -prune 2>/dev/null | head -500`
     )
-    return stdout.split('\n')
+    return stdout
+      .split('\n')
       .filter(Boolean)
       .map(p => p.replace(/\/.git$/, ''))
       .sort()

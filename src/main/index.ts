@@ -8,6 +8,7 @@ import { startHooksServer, stopHooksServer } from './services/HooksServer'
 import { closeDb, settingsDb } from './services/Database'
 import { installHooks } from './setup/claudeHooks'
 import { setupAutoUpdater, stopAutoUpdater } from './services/AutoUpdater'
+import { getPricingService } from './services/PricingService'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -41,7 +42,7 @@ function createWindow(): BrowserWindow {
     mainWindow = null
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  mainWindow.webContents.setWindowOpenHandler(details => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
@@ -69,6 +70,17 @@ app.whenReady().then(async () => {
   registerIpcHandlers(win)
 
   const settings = settingsDb.get()
+
+  // Initialize pricing service and attempt to update from web (non-blocking)
+  const pricingService = getPricingService()
+  await pricingService.initialize()
+  pricingService.updatePricingFromWeb().then(result => {
+    if (result.success) {
+      console.log('✅ Pricing updated successfully from Anthropic website')
+    } else {
+      console.log('ℹ️  Using cached pricing data:', result.error)
+    }
+  })
 
   if (settings.hooksEnabled) {
     startHooksServer(win, settings.hooksServerPort)

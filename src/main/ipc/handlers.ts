@@ -1,8 +1,16 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
-import { sessionDb, messageDb, projectDb, settingsDb, reviewDb, analyticsDb } from '../services/Database'
+import {
+  sessionDb,
+  messageDb,
+  projectDb,
+  settingsDb,
+  reviewDb,
+  analyticsDb,
+  dailyMetricsDb
+} from '../services/Database'
 import { areHooksInstalled, installHooks, uninstallHooks } from '../setup/claudeHooks'
 import { isHooksServerRunning } from '../services/HooksServer'
-import type { Session, AnalyticsFilters } from '../../shared/types'
+import type { Session, AnalyticsFilters, ClaudeMessage } from '../../shared/types'
 import {
   createTerminal,
   writeTerminal,
@@ -24,6 +32,14 @@ import { promisify } from 'util'
 import { basename } from 'path'
 import which from 'which'
 import { registerPendingLaunch } from '../services/FileWatcher'
+import fs from 'fs'
+import {
+  scanClaudeProjects,
+  readFirstEntry,
+  parseTranscriptFile,
+  deriveSessionTitle,
+  deriveProjectName
+} from '../services/SessionParser'
 
 const execAsync = promisify(exec)
 
@@ -54,8 +70,63 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('sessions:list', () => sessionDb.list())
 
-  ipcMain.handle('sessions:listByProjectAndBranch', (_e, projectPath: string, branch?: string) => {
-    return sessionDb.listByProjectAndBranch(projectPath, branch)
+  ipcMain.handle(
+    'sessions:listByProjectAndBranch',
+    (_e, projectPath: string, branch?: string, includeExternal?: boolean) => {
+      return sessionDb.listByProjectAndBranch(projectPath, branch, includeExternal)
+    }
+  )
+
+  ipcMain.handle('sessions:scanExternal', async () => {
+    try {
+      const allSessions = await scanClaudeProjects()
+      const externalSessions: Array<{
+        id: string
+        projectPath: string
+        projectName: string
+        transcriptPath: string
+        branch?: string
+        title?: string | null
+        messageCount: number
+        totalCostUsd?: number
+        startedAt: string
+        status: string
+        source: string
+      }> = []
+
+      for (const { sessionId, projectPath, transcriptPath } of allSessions) {
+        const existing = sessionDb.getById(sessionId)
+
+        // Solo incluir sesiones que NO están en el database
+        if (!existing) {
+          const firstEntry = await readFirstEntry(transcriptPath)
+          const branch = firstEntry?.gitBranch
+          const { messages, costSummary } = await parseTranscriptFile(transcriptPath)
+          const title = deriveSessionTitle(messages)
+
+          externalSessions.push({
+            id: sessionId,
+            projectPath,
+            projectName: deriveProjectName(projectPath),
+            transcriptPath,
+            branch,
+            title,
+            messageCount: messages.length,
+            totalCostUsd: costSummary.totalCostUsd,
+            startedAt: fs.statSync(transcriptPath).birthtime.toISOString(),
+            status: 'completed',
+            source: 'external'
+          })
+        }
+      }
+
+      // Ordenar por fecha de creación (más recientes primero)
+      externalSessions.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+
+      return { success: true, sessions: externalSessions }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
   })
 
   ipcMain.handle('sessions:get', (_e, id: string) => sessionDb.getById(id))
@@ -130,6 +201,79 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       }
       return { success: false, error: 'Could not detect current branch' }
     } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('sessions:importExternal', async (_e, sessionId: string, title?: string) => {
+    try {
+      // Verificar si ya fue importada
+      const existing = sessionDb.getById(sessionId)
+      if (existing) {
+        return { success: false, error: 'Session already imported' }
+      }
+
+      // Buscar sesión en filesystem
+      const allSessions = await scanClaudeProjects()
+      const target = allSessions.find(s => s.sessionId === sessionId)
+      if (!target) {
+        return { success: false, error: 'Session not found in filesystem' }
+      }
+
+      // Parsear transcript y extraer metadata
+      const { messages, costSummary, cwd, gitBranch } = await parseTranscriptFile(target.transcriptPath)
+      const projectPath = cwd || target.projectPath
+      const projectName = deriveProjectName(projectPath)
+
+      // Crear registro de sesión
+      const stat = fs.existsSync(target.transcriptPath) ? fs.statSync(target.transcriptPath) : null
+      const session: Session = {
+        id: sessionId,
+        projectPath,
+        projectName,
+        transcriptPath: target.transcriptPath,
+        startedAt: stat ? stat.birthtime.toISOString() : new Date().toISOString(),
+        model: 'claude-opus-4-5',
+        status: 'completed',
+        totalCostUsd: costSummary.totalCostUsd,
+        totalInputTokens: costSummary.totalInputTokens,
+        totalOutputTokens: costSummary.totalOutputTokens,
+        messageCount: messages.length,
+        title: title || deriveSessionTitle(messages) || undefined, // Usar título personalizado o el original
+        tags: [],
+        branch: gitBranch,
+        source: 'external' // Marcar como externa
+      }
+
+      // Insertar en database
+      sessionDb.upsert(session)
+
+      // Insertar todos los mensajes
+      for (const msg of messages) {
+        const fullMsg: ClaudeMessage = { ...msg, sessionId }
+        messageDb.insert(fullMsg)
+      }
+
+      // Insertar daily metrics para tracking de costos
+      if (costSummary.totalCostUsd && costSummary.totalCostUsd > 0) {
+        const today = new Date().toISOString().slice(0, 10)
+        dailyMetricsDb.addDelta(sessionId, today, projectPath, projectName, {
+          costUsd: costSummary.totalCostUsd ?? 0,
+          inputTokens: costSummary.totalInputTokens ?? 0,
+          outputTokens: costSummary.totalOutputTokens ?? 0,
+          messageCount: messages.length
+        })
+      }
+
+      // Emitir evento para actualizar UI (agregar a sidebar inmediatamente)
+      win.webContents.send('event:newSession', session)
+
+      console.log(
+        `[sessions:importExternal] Successfully imported session ${sessionId} with title "${title || deriveSessionTitle(messages)}"`
+      )
+      return { success: true, session }
+    } catch (err) {
+      console.error('[sessions:importExternal] Error:', err)
       return { success: false, error: String(err) }
     }
   })

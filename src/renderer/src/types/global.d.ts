@@ -5,6 +5,7 @@ declare global {
     api: {
       sessions: {
         list: () => Promise<Session[]>
+        listByProjectAndBranch: (projectPath: string, branch?: string, includeExternal?: boolean) => Promise<Session[]>
         get: (id: string) => Promise<Session | null>
         getMessages: (id: string) => Promise<ClaudeMessage[]>
         getCostSummary: (id: string) => Promise<SessionCostSummary | null>
@@ -12,7 +13,36 @@ declare global {
         updateTitle: (id: string, title: string) => Promise<void>
         addTag: (id: string, tag: string) => Promise<void>
         removeTag: (id: string, tag: string) => Promise<void>
-        launchNew: (opts: { projectPath: string; branch: string; name: string }) => Promise<{ success: boolean; launchId?: string; error?: string }>
+        launchNew: (opts: {
+          projectPath: string
+          branch: string
+          name: string
+        }) => Promise<{ success: boolean; launchId?: string; error?: string }>
+        scanExternal: () => Promise<{
+          success: boolean
+          sessions?: Array<{
+            id: string
+            projectPath: string
+            projectName: string
+            transcriptPath: string
+            branch?: string
+            title?: string
+            messageCount: number
+            totalCostUsd?: number
+            startedAt: string
+            status: string
+            source: string
+          }>
+          error?: string
+        }>
+        importExternal: (
+          sessionId: string,
+          title?: string
+        ) => Promise<{
+          success: boolean
+          session?: Session
+          error?: string
+        }>
       }
       projects: {
         list: () => Promise<Project[]>
@@ -27,7 +57,12 @@ declare global {
         status: () => Promise<{ installed: boolean; serverRunning: boolean }>
       }
       claude: {
-        launch: (opts: { cwd: string; prompt?: string; sessionId?: string; resume?: boolean }) => Promise<{ success: boolean; pid?: number; error?: string }>
+        launch: (opts: {
+          cwd: string
+          prompt?: string
+          sessionId?: string
+          resume?: boolean
+        }) => Promise<{ success: boolean; pid?: number; error?: string }>
         kill: (pid: number) => Promise<void>
       }
       terminal: {
@@ -47,7 +82,11 @@ declare global {
         stash: (projectPath: string) => Promise<{ success: boolean; error?: string }>
         branches: (projectPath: string) => Promise<string[]>
         findRepos: (baseDir: string) => Promise<string[]>
-        reviewWithClaude: (opts: { sessionId: string; projectPath: string; prompt: string }) => Promise<{ success: boolean; response?: string; error?: string }>
+        reviewWithClaude: (opts: {
+          sessionId: string
+          projectPath: string
+          prompt: string
+        }) => Promise<{ success: boolean; response?: string; error?: string }>
       }
       dialog: {
         openFolder: (defaultPath?: string) => Promise<string | null>

@@ -44,6 +44,8 @@ function initSchema(db: Database.Database): void {
       total_cost_usd REAL,
       total_input_tokens INTEGER,
       total_output_tokens INTEGER,
+      cache_read_tokens INTEGER,
+      cache_creation_tokens INTEGER,
       message_count INTEGER NOT NULL DEFAULT 0,
       title TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
@@ -126,6 +128,18 @@ function initSchema(db: Database.Database): void {
     // Column already exists — safe to ignore
   }
 
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER`)
+  } catch {
+    // Column already exists — safe to ignore
+  }
+
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN cache_creation_tokens INTEGER`)
+  } catch {
+    // Column already exists — safe to ignore
+  }
+
   const existingSettings = db.prepare('SELECT key FROM settings WHERE key = ?').get('app_settings')
   if (!existingSettings) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('app_settings', JSON.stringify(DEFAULT_SETTINGS))
@@ -140,10 +154,12 @@ export const sessionDb = {
       INSERT INTO sessions (
         id, project_path, project_name, transcript_path, started_at, ended_at,
         model, status, total_cost_usd, total_input_tokens, total_output_tokens,
+        cache_read_tokens, cache_creation_tokens,
         message_count, title, tags, source, branch
       ) VALUES (
         @id, @projectPath, @projectName, @transcriptPath, @startedAt, @endedAt,
         @model, @status, @totalCostUsd, @totalInputTokens, @totalOutputTokens,
+        @cacheReadTokens, @cacheCreationTokens,
         @messageCount, @title, @tags, @source, @branch
       )
       ON CONFLICT(id) DO UPDATE SET
@@ -152,6 +168,8 @@ export const sessionDb = {
         total_cost_usd = @totalCostUsd,
         total_input_tokens = @totalInputTokens,
         total_output_tokens = @totalOutputTokens,
+        cache_read_tokens = @cacheReadTokens,
+        cache_creation_tokens = @cacheCreationTokens,
         message_count = @messageCount,
         title = COALESCE(@title, title),
         branch = COALESCE(@branch, branch),
@@ -169,6 +187,8 @@ export const sessionDb = {
       totalCostUsd: session.totalCostUsd ?? null,
       totalInputTokens: session.totalInputTokens ?? null,
       totalOutputTokens: session.totalOutputTokens ?? null,
+      cacheReadTokens: session.cacheReadTokens ?? null,
+      cacheCreationTokens: session.cacheCreationTokens ?? null,
       messageCount: session.messageCount,
       title: session.title ?? null,
       tags: JSON.stringify(session.tags),
@@ -230,11 +250,20 @@ export const sessionDb = {
       UPDATE sessions SET
         total_cost_usd = ?,
         total_input_tokens = ?,
-        total_output_tokens = ?
+        total_output_tokens = ?,
+        cache_read_tokens = ?,
+        cache_creation_tokens = ?
       WHERE id = ?
     `
       )
-      .run(summary.totalCostUsd ?? null, summary.totalInputTokens ?? null, summary.totalOutputTokens ?? null, id)
+      .run(
+        summary.totalCostUsd ?? null,
+        summary.totalInputTokens ?? null,
+        summary.totalOutputTokens ?? null,
+        summary.cacheReadTokens ?? null,
+        summary.cacheCreationTokens ?? null,
+        id
+      )
   },
 
   incrementMessageCount(id: string): void {
@@ -276,14 +305,18 @@ export const sessionDb = {
     return row ? rowToSession(row) : null
   },
 
-  listByProjectAndBranch(projectPath: string, branch?: string): Session[] {
+  listByProjectAndBranch(projectPath: string, branch?: string, includeExternal?: boolean): Session[] {
     const db = getDb()
     let query = `
       SELECT * FROM sessions
       WHERE project_path = ?
-        AND source = 'app'
     `
     const params: unknown[] = [projectPath]
+
+    // Filtrar por source a menos que explícitamente se incluyan externas
+    if (!includeExternal) {
+      query += ` AND source = 'app'`
+    }
 
     if (branch && branch !== 'all') {
       query += ` AND (branch = ? OR branch IS NULL)`
@@ -410,6 +443,8 @@ function rowToSession(row: Record<string, unknown>): Session {
     totalCostUsd: (row.total_cost_usd as number | null) ?? undefined,
     totalInputTokens: (row.total_input_tokens as number | null) ?? undefined,
     totalOutputTokens: (row.total_output_tokens as number | null) ?? undefined,
+    cacheReadTokens: (row.cache_read_tokens as number | null) ?? undefined,
+    cacheCreationTokens: (row.cache_creation_tokens as number | null) ?? undefined,
     messageCount: row.message_count as number,
     title: (row.title as string | null) ?? undefined,
     tags: (() => {

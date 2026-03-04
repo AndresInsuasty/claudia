@@ -20,6 +20,8 @@ export interface Session {
   totalCostUsd?: number
   totalInputTokens?: number
   totalOutputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
   messageCount: number
   tags: string[]
   title?: string
@@ -213,7 +215,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export interface IpcChannels {
   // Sessions
   'sessions:list': () => Session[]
-  'sessions:listByProjectAndBranch': (projectPath: string, branch?: string) => Session[]
+  'sessions:listByProjectAndBranch': (projectPath: string, branch?: string, includeExternal?: boolean) => Session[]
   'sessions:get': (id: string) => Session | null
   'sessions:getMessages': (id: string) => ClaudeMessage[]
   'sessions:getCostSummary': (id: string) => SessionCostSummary | null
