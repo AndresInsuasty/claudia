@@ -86,10 +86,22 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   loadMessages: async (sessionId: string) => {
     const existing = get().messages[sessionId]
-    if (existing) return
+    if (existing && existing.length > 0) return
     try {
       const msgs = await window.api.sessions.getMessages(sessionId)
-      set(state => ({ messages: { ...state.messages, [sessionId]: msgs } }))
+      set(state => {
+        const current = state.messages[sessionId] ?? []
+        if (current.length === 0) {
+          return { messages: { ...state.messages, [sessionId]: msgs } }
+        }
+        // Messages arrived via real-time events while the IPC call was in flight.
+        // Merge: add any DB-only messages, preserving real-time ones.
+        const currentIds = new Set(current.map(m => m.id))
+        const extra = msgs.filter(m => !currentIds.has(m.id))
+        if (extra.length === 0) return state
+        const merged = [...extra, ...current].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        return { messages: { ...state.messages, [sessionId]: merged } }
+      })
     } catch (err) {
       console.error('Failed to load messages:', err)
     }

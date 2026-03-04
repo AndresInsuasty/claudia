@@ -464,13 +464,15 @@ describe('sessionStore', () => {
       useSessionStore.setState({
         sessions: [{ ...mockSession, id: sessionId }],
         messages: {
-          [sessionId]: [{
-            id: 'msg-001',
-            sessionId,
-            role: 'user',
-            content: [{ type: 'text', text: 'Hello' }],
-            timestamp: '2026-02-22T10:00:00Z'
-          }]
+          [sessionId]: [
+            {
+              id: 'msg-001',
+              sessionId,
+              role: 'user',
+              content: [{ type: 'text', text: 'Hello' }],
+              timestamp: '2026-02-22T10:00:00Z'
+            }
+          ]
         }
       })
 
@@ -557,6 +559,120 @@ describe('sessionStore', () => {
       const { activeTerminals, hiddenTerminals } = useSessionStore.getState()
       expect(activeTerminals.has(sessionId)).toBe(false)
       expect(hiddenTerminals.has(sessionId)).toBe(false)
+    })
+  })
+
+  // ── loadMessages race condition regression ──────────────────────────────────
+
+  describe('loadMessages — first-user-message race condition', () => {
+    const sessionId = 'race-session-001'
+
+    const userMsg = {
+      id: 'msg-user-first',
+      sessionId,
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'holaa' }],
+      timestamp: '2026-03-01T10:00:01Z'
+    }
+
+    const assistantMsg = {
+      id: 'msg-assistant-first',
+      sessionId,
+      role: 'assistant' as const,
+      content: [{ type: 'text' as const, text: 'Hola!' }],
+      timestamp: '2026-03-01T10:00:02Z'
+    }
+
+    it('does not overwrite messages added via addMessage while IPC is in flight', async () => {
+      // Simulate: loadMessages starts IPC call, returns empty array (DB empty),
+      // but addMessage added the first user message while the IPC was pending.
+      let resolveIpc: (msgs: unknown[]) => void
+      mockApi.sessions.getMessages.mockReturnValueOnce(
+        new Promise(resolve => {
+          resolveIpc = resolve
+        })
+      )
+
+      const { loadMessages, addMessage } = useSessionStore.getState()
+
+      // Start loadMessages (IPC pending)
+      const loadPromise = loadMessages(sessionId)
+
+      // While IPC is in flight, a real-time event adds the first user message
+      addMessage(sessionId, userMsg)
+
+      // Verify message was added
+      expect(useSessionStore.getState().messages[sessionId]).toHaveLength(1)
+      expect(useSessionStore.getState().messages[sessionId][0].id).toBe('msg-user-first')
+
+      // Now IPC resolves with empty array (DB was empty when query ran)
+      resolveIpc!([])
+      await loadPromise
+
+      // The first user message must NOT be overwritten
+      const { messages } = useSessionStore.getState()
+      expect(messages[sessionId]).toHaveLength(1)
+      expect(messages[sessionId][0].id).toBe('msg-user-first')
+    })
+
+    it('merges DB results with real-time messages without duplicates', async () => {
+      let resolveIpc: (msgs: unknown[]) => void
+      mockApi.sessions.getMessages.mockReturnValueOnce(
+        new Promise(resolve => {
+          resolveIpc = resolve
+        })
+      )
+
+      const { loadMessages, addMessage } = useSessionStore.getState()
+
+      const loadPromise = loadMessages(sessionId)
+
+      // Real-time event adds the assistant message (user message not yet in flight)
+      addMessage(sessionId, assistantMsg)
+
+      // IPC resolves with BOTH messages (DB had them by the time query completed)
+      resolveIpc!([userMsg, assistantMsg])
+      await loadPromise
+
+      // Should have both messages, no duplicates, sorted by timestamp
+      const { messages } = useSessionStore.getState()
+      expect(messages[sessionId]).toHaveLength(2)
+      expect(messages[sessionId][0].id).toBe('msg-user-first')
+      expect(messages[sessionId][1].id).toBe('msg-assistant-first')
+    })
+
+    it('empty array from DB does not prevent subsequent loadMessages calls', async () => {
+      // First call: DB returns empty
+      mockApi.sessions.getMessages.mockResolvedValueOnce([])
+
+      const { loadMessages } = useSessionStore.getState()
+      await loadMessages(sessionId)
+
+      expect(useSessionStore.getState().messages[sessionId]).toEqual([])
+
+      // Second call: DB now has messages
+      mockApi.sessions.getMessages.mockResolvedValueOnce([userMsg])
+      await loadMessages(sessionId)
+
+      // Should have fetched again because previous result was empty
+      const { messages } = useSessionStore.getState()
+      expect(messages[sessionId]).toHaveLength(1)
+      expect(messages[sessionId][0].id).toBe('msg-user-first')
+    })
+
+    it('skips loading if messages already have content', async () => {
+      // Pre-populate with messages
+      useSessionStore.setState({
+        messages: { [sessionId]: [userMsg, assistantMsg] }
+      })
+
+      mockApi.sessions.getMessages.mockResolvedValueOnce([userMsg, assistantMsg])
+
+      const { loadMessages } = useSessionStore.getState()
+      await loadMessages(sessionId)
+
+      // Should NOT have called the API (early return)
+      expect(mockApi.sessions.getMessages).not.toHaveBeenCalled()
     })
   })
 })

@@ -51,7 +51,11 @@ export class PricingService {
       // Try user's local file first
       if (fs.existsSync(this.userPricingPath)) {
         const data = fs.readFileSync(this.userPricingPath, 'utf-8')
-        return JSON.parse(data)
+        const parsed = JSON.parse(data) as PricingData
+        if (this.validatePricingData(parsed)) {
+          return parsed
+        }
+        console.warn('[PricingService] User pricing file failed sanity check, falling back to bundled default')
       }
     } catch (error) {
       console.warn('Failed to load user pricing file:', error)
@@ -65,6 +69,27 @@ export class PricingService {
       // Return hardcoded fallback as last resort
       return this.getHardcodedFallback()
     }
+  }
+
+  /**
+   * Validate that pricing data passes basic sanity checks.
+   * For all Claude models, output price should always be > input price.
+   */
+  private validatePricingData(data: PricingData): boolean {
+    if (!data.models || Object.keys(data.models).length === 0) return false
+    for (const [key, model] of Object.entries(data.models)) {
+      if (model.output < model.input) {
+        console.warn(`[PricingService] Invalid pricing for ${key}: output ($${model.output}) < input ($${model.input})`)
+        return false
+      }
+      if (model.cache_read > model.input) {
+        console.warn(
+          `[PricingService] Invalid pricing for ${key}: cache_read ($${model.cache_read}) > input ($${model.input})`
+        )
+        return false
+      }
+    }
+    return true
   }
 
   /**
@@ -206,32 +231,56 @@ export class PricingService {
     const models: Record<string, ModelPricing> = {}
 
     // Find the pricing table
-    let pricingTable: cheerio.Cheerio<cheerio.Element> | null = null
-
-    $('table').each((_, table) => {
-      const text = $(table).text()
-      if (text.includes('Base Input Tokens') && text.includes('Output Tokens')) {
-        pricingTable = $(table)
-        return false // break
-      }
+    const tables = $('table').toArray()
+    const pricingEl = tables.find(t => {
+      const text = $(t).text()
+      return text.includes('Base Input Tokens') && text.includes('Output Tokens')
     })
 
-    if (!pricingTable) {
+    if (!pricingEl) {
       throw new Error('Pricing table not found in HTML')
     }
 
-    // Parse table rows
-    pricingTable.find('tbody tr').each((_, row) => {
+    const table = $(pricingEl)
+
+    // Dynamically map column positions from header row
+    const headerCells = table.find('thead th, thead td')
+    const colMap: Record<string, number> = {}
+    headerCells.each((i, cell) => {
+      const text = $(cell).text().toLowerCase()
+      if (text.includes('model')) colMap.model = i
+      else if (text.includes('output')) colMap.output = i
+      else if (text.includes('cache') && (text.includes('write') || text.includes('creation'))) colMap.cache_write = i
+      else if (text.includes('cache') && (text.includes('read') || text.includes('hit'))) colMap.cache_read = i
+      else if (text.includes('input') && !text.includes('cache')) colMap.input = i
+    })
+
+    // Fallback to legacy fixed positions if headers not found
+    const modelCol = colMap.model ?? 0
+    const inputCol = colMap.input ?? 1
+    const cacheWriteCol = colMap.cache_write ?? 2
+    const cacheReadCol = colMap.cache_read ?? 3
+    const outputCol = colMap.output ?? 4
+
+    // Parse table rows using dynamic column positions
+    table.find('tbody tr').each((_, row) => {
       const cells = $(row).find('td')
       if (cells.length < 5) return
 
-      const modelName = $(cells[0]).text().trim()
-      const inputPrice = this.extractPrice($(cells[1]).text())
-      const cacheWrite = this.extractPrice($(cells[2]).text())
-      const cacheRead = this.extractPrice($(cells[3]).text())
-      const outputPrice = this.extractPrice($(cells[4]).text())
+      const modelName = $(cells[modelCol]).text().trim()
+      const inputPrice = this.extractPrice($(cells[inputCol]).text())
+      const cacheWrite = this.extractPrice($(cells[cacheWriteCol]).text())
+      const cacheRead = this.extractPrice($(cells[cacheReadCol]).text())
+      const outputPrice = this.extractPrice($(cells[outputCol]).text())
 
       if (inputPrice && outputPrice && cacheWrite && cacheRead) {
+        // Sanity check: output price should be > input price for all Claude models
+        if (outputPrice < inputPrice) {
+          console.warn(
+            `[PricingService] Suspicious pricing for ${modelName}: output ($${outputPrice}) < input ($${inputPrice}), skipping`
+          )
+          return
+        }
         const modelKey = this.normalizeModelName(modelName)
         models[modelKey] = {
           name: modelName,
@@ -276,6 +325,7 @@ export class PricingService {
       .toLowerCase()
       .replace(/\s+/g, '-')
       .replace(/[^a-z0-9.-]/g, '')
+      .replace(/\./g, '-')
   }
 
   /**

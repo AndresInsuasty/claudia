@@ -5,7 +5,8 @@ import { registerIpcHandlers, cleanupProcesses } from './ipc/handlers'
 import { killAllTerminals } from './services/TerminalService'
 import { startFileWatcher, stopFileWatcher } from './services/FileWatcher'
 import { startHooksServer, stopHooksServer } from './services/HooksServer'
-import { closeDb, settingsDb } from './services/Database'
+import { closeDb, settingsDb, getDb, sessionDb } from './services/Database'
+import { parseTranscriptFile } from './services/SessionParser'
 import { installHooks } from './setup/claudeHooks'
 import { setupAutoUpdater, stopAutoUpdater } from './services/AutoUpdater'
 import { getPricingService } from './services/PricingService'
@@ -92,6 +93,9 @@ app.whenReady().then(async () => {
 
   await startFileWatcher()
 
+  // One-time migration: recalculate session costs after fixing double-counting + pricing bugs
+  runCostRecalcMigration().catch(err => console.warn('[Migration] Cost recalc failed:', err))
+
   // Configurar auto-updater
   setupAutoUpdater()
 
@@ -102,6 +106,46 @@ app.whenReady().then(async () => {
     }
   })
 })
+
+/**
+ * One-time migration: recalculate all session costs using the fixed parser
+ * (deduplicates streaming entries + correct pricing). Runs only once —
+ * stores a flag in the settings table so it never re-runs.
+ */
+async function runCostRecalcMigration(): Promise<void> {
+  const MIGRATION_KEY = 'migration_cost_recalc_v1'
+  const db = getDb()
+
+  const existing = db.prepare('SELECT key FROM settings WHERE key = ?').get(MIGRATION_KEY)
+  if (existing) return // already migrated
+
+  console.log('[Migration] Recalculating session costs (one-time fix for double-counting + pricing bugs)...')
+
+  const sessions = sessionDb.list()
+  let updated = 0
+
+  for (const session of sessions) {
+    try {
+      if (!session.transcriptPath) continue
+      const { costSummary } = await parseTranscriptFile(session.transcriptPath)
+
+      sessionDb.updateCost(session.id, {
+        totalCostUsd: costSummary.totalCostUsd ?? 0,
+        totalInputTokens: costSummary.totalInputTokens ?? 0,
+        totalOutputTokens: costSummary.totalOutputTokens ?? 0,
+        cacheReadTokens: costSummary.cacheReadTokens ?? 0,
+        cacheCreationTokens: costSummary.cacheCreationTokens ?? 0
+      })
+      updated++
+    } catch (err) {
+      console.warn(`[Migration] Failed to recalculate session ${session.id}:`, err)
+    }
+  }
+
+  // Mark migration as done
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(MIGRATION_KEY, 'done')
+  console.log(`[Migration] Recalculated costs for ${updated}/${sessions.length} sessions`)
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

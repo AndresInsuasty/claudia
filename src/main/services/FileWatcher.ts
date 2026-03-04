@@ -187,6 +187,7 @@ async function parseNewLinesOnly(
 
   let lineIndex = 0
   const pricingService = getPricingService()
+  const seenRequestIds = new Set<string>()
 
   for await (const line of rl) {
     // Skip lines we've already processed
@@ -228,20 +229,27 @@ async function parseNewLinesOnly(
 
         if (msg.model) model = msg.model
 
-        // Calculate incremental cost for this message
+        // Deduplicate usage: Claude Code writes multiple JSONL entries per API call
+        // (e.g. thinking + text chunks) that share the same requestId/msg.id and
+        // carry identical cumulative usage. Only count usage once per API call.
         if (msg.usage) {
-          const inputT = msg.usage.input_tokens ?? 0
-          const outputT = msg.usage.output_tokens ?? 0
-          const cacheCreationT = msg.usage.cache_creation_input_tokens ?? 0
-          const cacheReadT = msg.usage.cache_read_input_tokens ?? 0
+          const usageKey = entry.requestId || msg.id || ''
+          if (!usageKey || !seenRequestIds.has(usageKey)) {
+            if (usageKey) seenRequestIds.add(usageKey)
 
-          deltaInput += inputT
-          deltaOutput += outputT
-          deltaCacheRead += cacheReadT
-          deltaCacheCreation += cacheCreationT
+            const inputT = msg.usage.input_tokens ?? 0
+            const outputT = msg.usage.output_tokens ?? 0
+            const cacheCreationT = msg.usage.cache_creation_input_tokens ?? 0
+            const cacheReadT = msg.usage.cache_read_input_tokens ?? 0
 
-          // Calculate cost using current pricing
-          deltaCost += pricingService.calculateCost(model, inputT, outputT, cacheCreationT, cacheReadT)
+            deltaInput += inputT
+            deltaOutput += outputT
+            deltaCacheRead += cacheReadT
+            deltaCacheCreation += cacheCreationT
+
+            // Calculate cost using current pricing
+            deltaCost += pricingService.calculateCost(model, inputT, outputT, cacheCreationT, cacheReadT)
+          }
         }
 
         // Build message content

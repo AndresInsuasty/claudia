@@ -128,6 +128,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   let cwd: string | undefined
   let gitBranch: string | undefined
   let rawLineCount = 0
+  const seenRequestIds = new Set<string>()
 
   if (!fs.existsSync(transcriptPath)) {
     return { messages, costSummary: {}, rawLineCount: 0 }
@@ -162,20 +163,28 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
 
         if (msg.model) model = msg.model
 
+        // Deduplicate usage: Claude Code writes multiple JSONL entries per API call
+        // (e.g. thinking + text chunks) that share the same requestId/msg.id and
+        // carry identical cumulative usage. Only count usage once per API call.
         if (msg.usage) {
-          const inputT = msg.usage.input_tokens ?? 0
-          const outputT = msg.usage.output_tokens ?? 0
-          const cacheCreationT = msg.usage.cache_creation_input_tokens ?? 0
-          const cacheReadT = msg.usage.cache_read_input_tokens ?? 0
+          const usageKey = entry.requestId || msg.id || ''
+          if (!usageKey || !seenRequestIds.has(usageKey)) {
+            if (usageKey) seenRequestIds.add(usageKey)
 
-          totalInputTokens += inputT
-          totalOutputTokens += outputT
-          cacheReadTokens += cacheReadT
-          cacheCreationTokens += cacheCreationT
+            const inputT = msg.usage.input_tokens ?? 0
+            const outputT = msg.usage.output_tokens ?? 0
+            const cacheCreationT = msg.usage.cache_creation_input_tokens ?? 0
+            const cacheReadT = msg.usage.cache_read_input_tokens ?? 0
 
-          // Use PricingService for accurate cost calculation including cache tokens
-          const pricingService = getPricingService()
-          totalCostUsd += pricingService.calculateCost(model, inputT, outputT, cacheCreationT, cacheReadT)
+            totalInputTokens += inputT
+            totalOutputTokens += outputT
+            cacheReadTokens += cacheReadT
+            cacheCreationTokens += cacheCreationT
+
+            // Use PricingService for accurate cost calculation including cache tokens
+            const pricingService = getPricingService()
+            totalCostUsd += pricingService.calculateCost(model, inputT, outputT, cacheCreationT, cacheReadT)
+          }
         }
 
         // Handle both array and string content formats
