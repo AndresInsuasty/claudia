@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { ipcMain, dialog } from 'electron'
 import {
   sessionDb,
   messageDb,
@@ -32,6 +32,7 @@ import { promisify } from 'util'
 import { basename } from 'path'
 import which from 'which'
 import { registerPendingLaunch } from '../services/FileWatcher'
+import { sendToRenderer, getMainWindow } from '../services/WindowManager'
 import fs from 'fs'
 import {
   scanClaudeProjects,
@@ -45,7 +46,7 @@ const execAsync = promisify(exec)
 
 const runningProcesses = new Map<number, ChildProcess>()
 
-export function registerIpcHandlers(win: BrowserWindow): void {
+export function registerIpcHandlers(): void {
   ipcMain.handle('sessions:resetActive', () => {
     console.log('[IPC] sessions:resetActive — marking stale active sessions as completed and killing orphan terminals')
     sessionDb.resetActiveSessions()
@@ -162,7 +163,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const updatedSession = sessionDb.getById(id)
     if (updatedSession) {
       console.log(`[IPC] sessions:updateStatus — emitting event:sessionUpdated for id=${id}`)
-      win.webContents.send('event:sessionUpdated', updatedSession)
+      sendToRenderer('event:sessionUpdated', updatedSession)
     } else {
       console.warn(`[IPC] sessions:updateStatus — session not found after update id=${id}`)
     }
@@ -195,7 +196,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         sessionDb.updateBranch(id, branch)
         const updatedSession = sessionDb.getById(id)
         if (updatedSession) {
-          win.webContents.send('event:sessionUpdated', updatedSession)
+          sendToRenderer('event:sessionUpdated', updatedSession)
         }
         return { success: true, branch }
       }
@@ -266,7 +267,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       }
 
       // Emitir evento para actualizar UI (agregar a sidebar inmediatamente)
-      win.webContents.send('event:newSession', session)
+      sendToRenderer('event:newSession', session)
 
       console.log(
         `[sessions:importExternal] Successfully imported session ${sessionId} with title "${title || deriveSessionTitle(messages)}"`
@@ -372,18 +373,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
             if (!line.trim()) continue
             try {
               const event = JSON.parse(line)
-              win.webContents.send('event:claudeStreamEvent', { pid: child.pid, event })
+              sendToRenderer('event:claudeStreamEvent', { pid: child.pid, event })
             } catch {}
           }
         })
 
         child.stderr?.on('data', (data: Buffer) => {
-          win.webContents.send('event:claudeStreamError', { pid: child.pid, error: data.toString() })
+          sendToRenderer('event:claudeStreamError', { pid: child.pid, error: data.toString() })
         })
 
         child.on('exit', code => {
           if (child.pid) runningProcesses.delete(child.pid)
-          win.webContents.send('event:claudeProcessExit', { pid: child.pid, code })
+          sendToRenderer('event:claudeProcessExit', { pid: child.pid, code })
         })
 
         return { success: true, pid: child.pid }
@@ -463,7 +464,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           source: 'app' as const
         }
         sessionDb.upsert(provisionalSession)
-        win.webContents.send('event:newSession', provisionalSession)
+        sendToRenderer('event:newSession', provisionalSession)
         console.log(`[sessions:launchNew] Provisional session created id=${launchId}`)
 
         return { success: true, launchId }
@@ -476,7 +477,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   // ─── Terminal handlers ───────────────────────────────────────────────────
   ipcMain.handle('terminal:create', (_e, sessionId: string, cwd: string) => {
     console.log(`[IPC] terminal:create id=${sessionId} cwd=${cwd}`)
-    const ok = createTerminal(sessionId, cwd, win)
+    const ok = createTerminal(sessionId, cwd)
     return { success: ok }
   })
 
@@ -527,6 +528,8 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   ipcMain.handle('dialog:openFolder', async (_e, defaultPath?: string) => {
+    const win = getMainWindow()
+    if (!win) return null
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory'],
       defaultPath: defaultPath || process.env.HOME || '/'

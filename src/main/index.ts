@@ -9,6 +9,7 @@ import { closeDb, settingsDb } from './services/Database'
 import { installHooks } from './setup/claudeHooks'
 import { setupAutoUpdater, stopAutoUpdater } from './services/AutoUpdater'
 import { getPricingService } from './services/PricingService'
+import { setMainWindow } from './services/WindowManager'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -40,6 +41,7 @@ function createWindow(): BrowserWindow {
   mainWindow.on('closed', () => {
     killAllTerminals()
     mainWindow = null
+    setMainWindow(null)
   })
 
   mainWindow.webContents.setWindowOpenHandler(details => {
@@ -66,8 +68,9 @@ app.whenReady().then(async () => {
   })
 
   const win = createWindow()
+  setMainWindow(win)
 
-  registerIpcHandlers(win)
+  registerIpcHandlers()
 
   const settings = settingsDb.get()
 
@@ -83,18 +86,19 @@ app.whenReady().then(async () => {
   })
 
   if (settings.hooksEnabled) {
-    startHooksServer(win, settings.hooksServerPort)
+    startHooksServer(settings.hooksServerPort)
     installHooks()
   }
 
-  await startFileWatcher(win)
+  await startFileWatcher()
 
   // Configurar auto-updater
-  setupAutoUpdater(win)
+  setupAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+      const newWin = createWindow()
+      setMainWindow(newWin)
     }
   })
 })

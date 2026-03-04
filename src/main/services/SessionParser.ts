@@ -115,6 +115,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   costSummary: Partial<SessionCostSummary>
   cwd?: string
   gitBranch?: string
+  rawLineCount: number
 }> {
   const messages: ClaudeMessage[] = []
   let totalInputTokens = 0
@@ -126,15 +127,17 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
   let model = ''
   let cwd: string | undefined
   let gitBranch: string | undefined
+  let rawLineCount = 0
 
   if (!fs.existsSync(transcriptPath)) {
-    return { messages, costSummary: {} }
+    return { messages, costSummary: {}, rawLineCount: 0 }
   }
 
   const fileStream = fs.createReadStream(transcriptPath)
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity })
 
   for await (const line of rl) {
+    rawLineCount++
     if (!line.trim()) continue
     try {
       const entry: TranscriptEntry = JSON.parse(line)
@@ -233,6 +236,7 @@ export async function parseTranscriptFile(transcriptPath: string): Promise<{
     messages,
     cwd,
     gitBranch,
+    rawLineCount,
     costSummary: {
       totalCostUsd,
       totalInputTokens,

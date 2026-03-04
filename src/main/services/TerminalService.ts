@@ -1,6 +1,6 @@
-import { BrowserWindow } from 'electron'
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import { sendToRenderer } from './WindowManager'
 
 const execAsync = promisify(exec)
 
@@ -27,7 +27,7 @@ interface TerminalInstance {
 
 const terminals = new Map<string, TerminalInstance>()
 
-export function createTerminal(sessionId: string, cwd: string, win: BrowserWindow): boolean {
+export function createTerminal(sessionId: string, cwd: string): boolean {
   const nodePty = getPty()
   if (!nodePty) {
     console.error(`[TerminalService] createTerminal FAILED — node-pty not available (id=${sessionId})`)
@@ -53,17 +53,13 @@ export function createTerminal(sessionId: string, cwd: string, win: BrowserWindo
   const inst: TerminalInstance = { proc, cwd, currentId: sessionId }
 
   proc.onData((data: string) => {
-    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('event:terminal:data', { sessionId: inst.currentId, data })
-    }
+    sendToRenderer('event:terminal:data', { sessionId: inst.currentId, data })
   })
 
   proc.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
     console.log(`[TerminalService] onExit id=${inst.currentId} exitCode=${exitCode} signal=${signal}`)
     terminals.delete(inst.currentId)
-    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('event:terminal:exit', { sessionId: inst.currentId })
-    }
+    sendToRenderer('event:terminal:exit', { sessionId: inst.currentId })
   })
 
   terminals.set(sessionId, inst)

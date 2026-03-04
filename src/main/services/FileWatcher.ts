@@ -2,7 +2,6 @@ import chokidar from 'chokidar'
 import fs from 'fs'
 import path from 'path'
 import readline from 'readline'
-import { BrowserWindow } from 'electron'
 import type { ClaudeMessage, Session, TranscriptEntry } from '../../shared/types'
 import { sessionDb, messageDb, dailyMetricsDb } from './Database'
 import { deriveProjectName } from './SessionParser'
@@ -16,6 +15,7 @@ import {
   parseStreamJsonLine
 } from './SessionParser'
 import { getPricingService } from './PricingService'
+import { sendToRenderer } from './WindowManager'
 
 interface WatchedFile {
   sessionId: string
@@ -56,7 +56,19 @@ export function peekPendingLaunch(projectPath: string): PendingLaunch | undefine
   return pendingLaunches.get(projectPath)
 }
 
-export async function startFileWatcher(win: BrowserWindow): Promise<void> {
+/**
+ * Fallback: consume the first (and typically only) pending launch regardless of path.
+ * Used when the hook payload doesn't include cwd so path-based matching is impossible.
+ */
+export function consumeAnyPendingLaunch(): { projectPath: string; launch: PendingLaunch } | undefined {
+  const first = pendingLaunches.entries().next()
+  if (first.done) return undefined
+  const [projectPath, launch] = first.value
+  pendingLaunches.delete(projectPath)
+  return { projectPath, launch }
+}
+
+export async function startFileWatcher(): Promise<void> {
   const projectsDir = getClaudeProjectsDir()
 
   if (!fs.existsSync(projectsDir)) {
@@ -77,8 +89,8 @@ export async function startFileWatcher(win: BrowserWindow): Promise<void> {
   })
 
   watcher
-    .on('add', filePath => onFileAdded(filePath, win))
-    .on('change', filePath => onFileChanged(filePath, win))
+    .on('add', filePath => onFileAdded(filePath))
+    .on('change', filePath => onFileChanged(filePath))
     .on('error', err => console.error('[FileWatcher] Error:', err))
 
   console.log('[FileWatcher] Watching:', projectsDir)
@@ -91,7 +103,7 @@ export function stopFileWatcher(): void {
   }
 }
 
-async function importExistingSessions(win: BrowserWindow): Promise<void> {
+async function importExistingSessions(): Promise<void> {
   const found = await scanClaudeProjects()
 
   for (const { sessionId, projectPath, transcriptPath } of found) {
@@ -119,11 +131,11 @@ async function importExistingSessions(win: BrowserWindow): Promise<void> {
       continue
     }
 
-    await processNewTranscript(sessionId, projectPath, transcriptPath, win)
+    await processNewTranscript(sessionId, projectPath, transcriptPath)
   }
 }
 
-async function onFileAdded(filePath: string, win: BrowserWindow): Promise<void> {
+async function onFileAdded(filePath: string): Promise<void> {
   if (!filePath.endsWith('.jsonl')) return
 
   const parts = filePath.split(path.sep)
@@ -136,7 +148,7 @@ async function onFileAdded(filePath: string, win: BrowserWindow): Promise<void> 
   const firstEntry = await readFirstEntry(filePath)
   const projectPath = firstEntry?.cwd || decodeProjectPath(encodedProject)
 
-  await processNewTranscript(sessionId, projectPath, filePath, win)
+  await processNewTranscript(sessionId, projectPath, filePath)
 }
 
 /**
@@ -154,6 +166,7 @@ async function parseNewLinesOnly(
   deltaCacheRead: number
   deltaCacheCreation: number
   model: string
+  totalRawLines: number
 }> {
   const newMessages: ClaudeMessage[] = []
   let deltaInput = 0
@@ -163,8 +176,10 @@ async function parseNewLinesOnly(
   let deltaCost = 0
   let model = ''
 
+  let totalRawLines = startLineIndex
+
   if (!fs.existsSync(filePath)) {
-    return { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, model }
+    return { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, model, totalRawLines }
   }
 
   const fileStream = fs.createReadStream(filePath)
@@ -254,15 +269,16 @@ async function parseNewLinesOnly(
     lineIndex++
   }
 
-  return { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, model }
+  totalRawLines = lineIndex
+  return { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, model, totalRawLines }
 }
 
-async function onFileChanged(filePath: string, win: BrowserWindow): Promise<void> {
+async function onFileChanged(filePath: string): Promise<void> {
   if (!filePath.endsWith('.jsonl')) return
 
   const watched = watchedFiles.get(filePath)
   if (!watched) {
-    await onFileAdded(filePath, win)
+    await onFileAdded(filePath)
     return
   }
 
@@ -274,14 +290,14 @@ async function onFileChanged(filePath: string, win: BrowserWindow): Promise<void
   }
 
   // Parse only NEW lines (incremental) to preserve historical pricing
-  const { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation } =
+  const { newMessages, deltaCost, deltaInput, deltaOutput, deltaCacheRead, deltaCacheCreation, totalRawLines } =
     await parseNewLinesOnly(filePath, watched.lastLineCount)
 
   // Insert new messages
   for (const msg of newMessages) {
     const fullMsg: ClaudeMessage = { ...msg, sessionId: watched.sessionId }
     messageDb.insert(fullMsg)
-    win.webContents.send('event:messageAdded', { sessionId: watched.sessionId, message: fullMsg })
+    sendToRenderer('event:messageAdded', { sessionId: watched.sessionId, message: fullMsg })
     sessionDb.incrementMessageCount(watched.sessionId)
   }
 
@@ -323,22 +339,17 @@ async function onFileChanged(filePath: string, win: BrowserWindow): Promise<void
     watched.lastCacheCreationTokens = newTotalCacheCreation
   }
 
-  watched.lastLineCount += newMessages.length
+  watched.lastLineCount = totalRawLines
   watched.lastSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
 
   const updatedSession = sessionDb.getById(watched.sessionId)
   if (updatedSession) {
-    win.webContents.send('event:sessionUpdated', updatedSession)
+    sendToRenderer('event:sessionUpdated', updatedSession)
   }
 }
 
-async function processNewTranscript(
-  sessionId: string,
-  projectPath: string,
-  transcriptPath: string,
-  win: BrowserWindow
-): Promise<void> {
-  const { messages, costSummary, cwd, gitBranch } = await parseTranscriptFile(transcriptPath)
+async function processNewTranscript(sessionId: string, projectPath: string, transcriptPath: string): Promise<void> {
+  const { messages, costSummary, cwd, gitBranch, rawLineCount } = await parseTranscriptFile(transcriptPath)
   const resolvedProjectPath = cwd || projectPath
   const projectName = deriveProjectName(resolvedProjectPath)
 
@@ -370,11 +381,11 @@ async function processNewTranscript(
     startedAt: stat ? stat.birthtime.toISOString() : new Date().toISOString(),
     model: 'claude-opus-4-5',
     status: existingSession ? existingSession.status : 'completed',
-    totalCostUsd: costSummary.totalCostUsd,
-    totalInputTokens: costSummary.totalInputTokens,
-    totalOutputTokens: costSummary.totalOutputTokens,
+    totalCostUsd: costSummary.totalCostUsd ?? 0,
+    totalInputTokens: costSummary.totalInputTokens ?? 0,
+    totalOutputTokens: costSummary.totalOutputTokens ?? 0,
     messageCount: messages.length,
-    title,
+    title: title ?? undefined,
     tags: [],
     branch: pending?.branch || gitBranch || undefined,
     source: 'app'
@@ -387,7 +398,7 @@ async function processNewTranscript(
     messageDb.insert(fullMsg)
     // Send event for initial messages if session already exists (may be selected in UI)
     if (alreadyExists) {
-      win.webContents.send('event:messageAdded', { sessionId, message: fullMsg })
+      sendToRenderer('event:messageAdded', { sessionId, message: fullMsg })
     }
   }
 
@@ -408,7 +419,7 @@ async function processNewTranscript(
     projectName,
     transcriptPath,
     lastSize: stat ? stat.size : 0,
-    lastLineCount: messages.length,
+    lastLineCount: rawLineCount,
     lastCostUsd: costSummary.totalCostUsd ?? 0,
     lastInputTokens: costSummary.totalInputTokens ?? 0,
     lastOutputTokens: costSummary.totalOutputTokens ?? 0,
@@ -419,13 +430,13 @@ async function processNewTranscript(
   // If session was already in the sidebar (created by HooksServer), update it; otherwise add it
   if (alreadyExists) {
     const updated = sessionDb.getById(sessionId)
-    if (updated) win.webContents.send('event:sessionUpdated', updated)
+    if (updated) sendToRenderer('event:sessionUpdated', updated)
   } else {
-    win.webContents.send('event:newSession', session)
+    sendToRenderer('event:newSession', session)
   }
 }
 
-export async function refreshSession(sessionId: string, win: BrowserWindow): Promise<void> {
+export async function refreshSession(sessionId: string): Promise<void> {
   // Verify session exists in DB before processing (prevents FOREIGN KEY errors for external sessions)
   const existingSession = sessionDb.getById(sessionId)
   if (!existingSession) {
@@ -435,17 +446,15 @@ export async function refreshSession(sessionId: string, win: BrowserWindow): Pro
 
   const entry = Array.from(watchedFiles.values()).find(w => w.sessionId === sessionId)
   if (entry) {
-    await onFileChanged(entry.transcriptPath, win)
+    await onFileChanged(entry.transcriptPath)
     return
   }
 
   // Session not in watchedFiles — find its transcript and register it
-  // with the current DB message count so onFileChanged only sends NEW messages.
+  // with the current raw line count so onFileChanged only sends NEW messages.
   const found = await scanClaudeProjects()
   const target = found.find(f => f.sessionId === sessionId)
   if (!target) return
-
-  const existingMsgCount = existingSession?.messageCount ?? 0
 
   const stat = fs.existsSync(target.transcriptPath) ? fs.statSync(target.transcriptPath) : null
 
@@ -453,13 +462,16 @@ export async function refreshSession(sessionId: string, win: BrowserWindow): Pro
   const firstEntry = await readFirstEntry(target.transcriptPath)
   const projectPath = firstEntry?.cwd || target.projectPath
 
+  // Count raw lines in the transcript so incremental parsing starts from the right position
+  const { rawLineCount: existingRawLines } = await parseTranscriptFile(target.transcriptPath)
+
   watchedFiles.set(target.transcriptPath, {
     sessionId,
     projectPath,
     projectName: existingSession?.projectName ?? deriveProjectName(projectPath),
     transcriptPath: target.transcriptPath,
     lastSize: stat ? stat.size : 0,
-    lastLineCount: existingMsgCount,
+    lastLineCount: existingRawLines,
     lastCostUsd: existingSession?.totalCostUsd ?? 0,
     lastInputTokens: existingSession?.totalInputTokens ?? 0,
     lastOutputTokens: existingSession?.totalOutputTokens ?? 0,
@@ -468,10 +480,10 @@ export async function refreshSession(sessionId: string, win: BrowserWindow): Pro
   })
 
   // Now call onFileChanged which will only send messages after lastLineCount
-  await onFileChanged(target.transcriptPath, win)
+  await onFileChanged(target.transcriptPath)
 }
 
-export async function forceProcessSession(sessionId: string, win: BrowserWindow): Promise<void> {
+export async function forceProcessSession(sessionId: string): Promise<void> {
   if (watchedFiles.has(sessionId)) return
 
   const found = await scanClaudeProjects()
@@ -481,7 +493,7 @@ export async function forceProcessSession(sessionId: string, win: BrowserWindow)
   const alreadyWatched = Array.from(watchedFiles.values()).some(w => w.sessionId === sessionId)
   if (alreadyWatched) return
 
-  await processNewTranscript(target.sessionId, target.projectPath, target.transcriptPath, win)
+  await processNewTranscript(target.sessionId, target.projectPath, target.transcriptPath)
 }
 
 export function markSessionActive(sessionId: string): void {
