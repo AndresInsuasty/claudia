@@ -10,11 +10,12 @@ import SessionControls from '../Terminal/SessionControls'
 import ChatHeader from '../Chat/ChatHeader'
 import NewSessionDialog from './NewSessionDialog'
 import AnalyticsPanel from '../Analytics/AnalyticsPanel'
-import { Code2, ScrollText, Info, Zap, Plus, ChevronRight, ChevronDown, Square } from 'lucide-react'
+import { Code2, ScrollText, Info, Zap, Plus, ChevronRight, Square } from 'lucide-react'
 import type { Session } from '../../../../shared/types'
 
 function GlobalTerminalPanel(): React.JSX.Element | null {
-  const { activeTerminals, hiddenTerminals, selectedSessionId, toggleTerminalVisible, terminateTerminalSession } = useSessionStore()
+  const { activeTerminals, hiddenTerminals, selectedSessionId, toggleTerminalVisible, terminateTerminalSession } =
+    useSessionStore()
 
   // No terminals at all — nothing to render
   if (activeTerminals.size === 0) return null
@@ -26,9 +27,7 @@ function GlobalTerminalPanel(): React.JSX.Element | null {
   return (
     <>
       {/* Terminal panel container — visible only when selected session has visible terminal */}
-      <div className={`w-[45%] min-w-[320px] border-l border-claude-border flex flex-col ${
-        isVisible ? '' : 'hidden'
-      }`}>
+      <div className={`w-[45%] min-w-[320px] border-l border-claude-border flex flex-col ${isVisible ? '' : 'hidden'}`}>
         <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-claude-panel border-b border-claude-border shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
@@ -64,22 +63,6 @@ function GlobalTerminalPanel(): React.JSX.Element | null {
           ))}
         </div>
       </div>
-
-      {/* Floating button when selected session has terminal but it's hidden */}
-      {selectedHasTerminal && !isVisible && (
-        <div className="fixed right-4 bottom-4 z-50">
-          <button
-            onClick={() => selectedSessionId && toggleTerminalVisible(selectedSessionId)}
-            className="flex items-center gap-2 px-3 py-2 bg-claude-panel border border-claude-border rounded-lg shadow-lg hover:bg-claude-hover transition-colors text-claude-text"
-            title="Show terminal"
-          >
-            <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
-            <span className="text-xs font-medium">Terminal</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            <ChevronDown size={14} className="text-claude-muted" />
-          </button>
-        </div>
-      )}
     </>
   )
 }
@@ -94,10 +77,10 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { id: 'code',        label: 'Code',         icon: <Code2 size={13} />,       activeOnly: true },
-  { id: 'logs',        label: 'Chat',          icon: <ScrollText size={13} /> },
-  { id: 'session',     label: 'Session Info',  icon: <Info size={13} /> },
-  { id: 'consumption', label: 'Consumption',   icon: <Zap size={13} /> },
+  { id: 'code', label: 'Code', icon: <Code2 size={13} />, activeOnly: true },
+  { id: 'logs', label: 'Chat', icon: <ScrollText size={13} /> },
+  { id: 'session', label: 'Session Info', icon: <Info size={13} /> },
+  { id: 'consumption', label: 'Consumption', icon: <Zap size={13} /> }
 ]
 
 function SessionView({ session }: { session: Session }): React.JSX.Element {
@@ -106,7 +89,7 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
   const [showNewSession, setShowNewSession] = useState(false)
   const { resumeSession, deleteSession } = useSessionStore()
 
-  const currentTab = isActive ? activeTab : (activeTab === 'code' ? 'logs' : activeTab)
+  const currentTab = isActive ? activeTab : activeTab === 'code' ? 'logs' : activeTab
 
   const handleResume = useCallback(async () => {
     await resumeSession(session.id, session.projectPath, session.branch)
@@ -126,12 +109,7 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
       <ChatHeader session={session} />
 
       {/* Session controls */}
-      <SessionControls
-        session={session}
-        onResume={handleResume}
-        onRollback={handleRollback}
-        onDelete={handleDelete}
-      />
+      <SessionControls session={session} onResume={handleResume} onRollback={handleRollback} onDelete={handleDelete} />
 
       {/* Tab bar */}
       <div className="flex items-center border-b border-claude-border bg-claude-panel shrink-0 px-2">
@@ -148,8 +126,8 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
                 isCurrent
                   ? 'border-claude-orange text-claude-text'
                   : disabled
-                  ? 'border-transparent text-claude-muted/40 cursor-not-allowed'
-                  : 'border-transparent text-claude-muted hover:text-claude-text'
+                    ? 'border-transparent text-claude-muted/40 cursor-not-allowed'
+                    : 'border-transparent text-claude-muted hover:text-claude-text'
               }`}
             >
               {tab.icon}
@@ -170,15 +148,13 @@ function SessionView({ session }: { session: Session }): React.JSX.Element {
 
       {/* Tab content — fills available space; terminal panel is rendered at MainPanel level */}
       <div className="flex flex-col flex-1 overflow-hidden">
-        {currentTab === 'logs'        && <ChatTab session={session} />}
-        {currentTab === 'session'     && <SessionInfoTab session={session} />}
+        {currentTab === 'logs' && <ChatTab session={session} />}
+        {currentTab === 'session' && <SessionInfoTab session={session} />}
         {currentTab === 'consumption' && <ConsumptionTab session={session} />}
-        {currentTab === 'code'        && isActive && <CodeTab session={session} />}
+        {currentTab === 'code' && isActive && <CodeTab session={session} />}
       </div>
 
-      {showNewSession && (
-        <NewSessionDialog onClose={() => setShowNewSession(false)} />
-      )}
+      {showNewSession && <NewSessionDialog onClose={() => setShowNewSession(false)} />}
     </div>
   )
 }
@@ -194,16 +170,15 @@ export default function MainPanel(): React.JSX.Element {
     !hiddenTerminals.has(selectedSessionId)
   )
 
-  const content = !selectedSessionId || !session
-    ? (
+  const content =
+    !selectedSessionId || !session ? (
       <>
         <WelcomeScreen onNewSession={() => setShowNewSession(true)} />
-        {showNewSession && (
-          <NewSessionDialog onClose={() => setShowNewSession(false)} />
-        )}
+        {showNewSession && <NewSessionDialog onClose={() => setShowNewSession(false)} />}
       </>
+    ) : (
+      <SessionView session={session} />
     )
-    : <SessionView session={session} />
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -234,14 +209,12 @@ export default function MainPanel(): React.JSX.Element {
           </div>
         </div>
       </div>
-      
+
       {/* Main content area with terminal */}
-      <div className="flex-1 flex flex-row overflow-hidden">
+      <div className="flex-1 flex flex-row overflow-hidden relative">
         {viewMode === 'sessions' ? (
           <>
-            <div className={`flex flex-col overflow-hidden ${isTerminalVisible ? 'w-[55%]' : 'flex-1'}`}>
-              {content}
-            </div>
+            <div className={`flex flex-col overflow-hidden ${isTerminalVisible ? 'w-[55%]' : 'flex-1'}`}>{content}</div>
             <GlobalTerminalPanel />
           </>
         ) : (

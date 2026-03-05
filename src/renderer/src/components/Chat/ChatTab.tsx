@@ -13,6 +13,7 @@ import {
   Square,
   LogOut,
   ChevronDown,
+  ChevronLeft,
   User,
   Bot,
   Brain,
@@ -223,6 +224,29 @@ function FilterDropdown({
   )
 }
 
+function TerminalBubble({ sessionId }: { sessionId: string }): React.JSX.Element | null {
+  const { activeTerminals, hiddenTerminals, toggleTerminalVisible } = useSessionStore()
+  const hasTerminal = activeTerminals.has(sessionId)
+  const isHidden = hiddenTerminals.has(sessionId)
+
+  if (!hasTerminal || !isHidden) return null
+
+  return (
+    <div className="sticky top-0 z-30 flex justify-end mb-2">
+      <button
+        onClick={() => toggleTerminalVisible(sessionId)}
+        className="flex items-center gap-2 px-3 py-2 bg-claude-panel border-2 rounded-lg shadow-lg hover:brightness-125 transition-all text-claude-text animate-terminal-glow"
+        title="Show terminal"
+      >
+        <span className="text-xs font-mono text-claude-muted">{'>'}_</span>
+        <span className="text-xs font-medium">Terminal</span>
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+        <ChevronLeft size={14} className="text-claude-muted" />
+      </button>
+    </div>
+  )
+}
+
 export default function ChatTab({ session }: Props): React.JSX.Element {
   const { messages, loadMessages, sessionActivity } = useSessionStore()
   const sessionMessages = messages[session.id] ?? []
@@ -291,6 +315,7 @@ export default function ChatTab({ session }: Props): React.JSX.Element {
       </div>
 
       <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 relative">
+        <TerminalBubble sessionId={session.id} />
         {turns.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-claude-muted text-sm">
