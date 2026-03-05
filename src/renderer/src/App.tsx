@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { useSessionStore } from './stores/sessionStore'
 import Sidebar from './components/Layout/Sidebar'
 import MainPanel from './components/Layout/MainPanel'
+import SetupWizard from './components/Settings/SetupWizard'
 import type { Session, ClaudeMessage } from '../../shared/types'
 
 export default function App(): React.JSX.Element {
@@ -18,7 +19,8 @@ export default function App(): React.JSX.Element {
     replaceSession,
     invalidateMessages,
     setSessionActivity,
-    viewMode
+    viewMode,
+    settings
   } = useSessionStore()
 
   useEffect(() => {
@@ -65,34 +67,31 @@ export default function App(): React.JSX.Element {
       removeActiveTerminal(sessionId)
     })
 
-    const offMessageAdded = window.api.on(
-      'event:messageAdded',
-      (data: unknown) => {
-        const { sessionId, message } = data as { sessionId: string; message: ClaudeMessage }
-        const { selectedSessionId } = useSessionStore.getState()
-        if (sessionId === selectedSessionId) {
-          addMessage(sessionId, message)
-        }
-        loadSessions()
+    const offMessageAdded = window.api.on('event:messageAdded', (data: unknown) => {
+      const { sessionId, message } = data as { sessionId: string; message: ClaudeMessage }
+      const { selectedSessionId } = useSessionStore.getState()
+      if (sessionId === selectedSessionId) {
+        addMessage(sessionId, message)
       }
-    )
+      loadSessions()
+    })
 
-    const offSessionActivity = window.api.on(
-      'event:sessionActivity',
-      (data: unknown) => {
-        const { sessionId, type, detail, timestamp } = data as {
-          sessionId: string; type: string; detail?: string; timestamp: string
-        }
-        setSessionActivity(sessionId, { type, detail, timestamp })
-        // Clear activity after 10 seconds if no new event arrives
-        setTimeout(() => {
-          const current = useSessionStore.getState().sessionActivity[sessionId]
-          if (current && current.timestamp === timestamp) {
-            setSessionActivity(sessionId, null)
-          }
-        }, 10000)
+    const offSessionActivity = window.api.on('event:sessionActivity', (data: unknown) => {
+      const { sessionId, type, detail, timestamp } = data as {
+        sessionId: string
+        type: string
+        detail?: string
+        timestamp: string
       }
-    )
+      setSessionActivity(sessionId, { type, detail, timestamp })
+      // Clear activity after 10 seconds if no new event arrives
+      setTimeout(() => {
+        const current = useSessionStore.getState().sessionActivity[sessionId]
+        if (current && current.timestamp === timestamp) {
+          setSessionActivity(sessionId, null)
+        }
+      }, 10000)
+    })
 
     return () => {
       offNewSession()
@@ -105,6 +104,12 @@ export default function App(): React.JSX.Element {
       offSessionActivity()
     }
   }, [])
+
+  const needsSetup = settings !== null && !settings.projectsRootDir
+
+  if (needsSetup) {
+    return <SetupWizard />
+  }
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-claude-dark">
