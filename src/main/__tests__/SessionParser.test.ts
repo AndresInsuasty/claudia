@@ -478,7 +478,7 @@ describe('deriveSessionTitle', () => {
     }
     const title = deriveSessionTitle([msg])
     expect(title).toHaveLength(61) // 60 chars + '…'
-    expect(title.endsWith('…')).toBe(true)
+    expect(title!.endsWith('…')).toBe(true)
   })
 
   it('returns short message without truncation', () => {
