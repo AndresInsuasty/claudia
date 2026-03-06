@@ -12,7 +12,8 @@ import {
   decodeProjectPath,
   scanClaudeProjects,
   readFirstEntry,
-  parseStreamJsonLine
+  parseStreamJsonLine,
+  transformAskUserQuestion
 } from './SessionParser'
 import { getPricingService } from './PricingService'
 import { sendToRenderer } from './WindowManager'
@@ -267,11 +268,31 @@ async function parseNewLinesOnly(
         }
 
         // Build message content
-        const content: ClaudeMessage['content'] = Array.isArray(msg.content)
+        let content: ClaudeMessage['content'] = Array.isArray(msg.content)
           ? (msg.content as ClaudeMessage['content'])
           : typeof msg.content === 'string' && msg.content.trim()
             ? [{ type: 'text', text: msg.content as string }]
             : []
+
+        // Transform AskUserQuestion tool_use into a readable question text block
+        content = transformAskUserQuestion(content)
+
+        // Attach toolUseResult (e.g. AskUserQuestion answers) to tool_result blocks
+        if (entry.toolUseResult) {
+          try {
+            const parsed =
+              typeof entry.toolUseResult === 'string' ? JSON.parse(entry.toolUseResult) : entry.toolUseResult
+            if (parsed && typeof parsed === 'object' && 'answers' in parsed) {
+              for (const block of content) {
+                if (block.type === 'tool_result') {
+                  ;(block as import('../../shared/types').ClaudeToolResultContent).toolUseResult = parsed
+                }
+              }
+            }
+          } catch {
+            /* ignore malformed toolUseResult */
+          }
+        }
 
         const message: ClaudeMessage = {
           id: entry.uuid || msg.id || `${entry.type}-${Date.now()}-${Math.random()}`,
