@@ -7,7 +7,8 @@ import {
   parseTranscriptFile,
   deriveProjectName,
   deriveSessionTitle,
-  parseStreamJsonLine
+  parseStreamJsonLine,
+  transformAskUserQuestion
 } from '../services/SessionParser'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -523,5 +524,100 @@ describe('parseStreamJsonLine', () => {
 
   it('returns null for malformed JSON', () => {
     expect(parseStreamJsonLine('{broken json')).toBeNull()
+  })
+})
+
+// ── transformAskUserQuestion ─────────────────────────────────────────────────
+
+describe('transformAskUserQuestion', () => {
+  it('transforms AskUserQuestion tool_use into text with interactive-question marker', () => {
+    // Real JSONL format from Claude Code sessions
+    const content = [
+      {
+        type: 'tool_use' as const,
+        id: 'toolu_018kpcRVffUnf334xyQqqnqa',
+        name: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: '¿Cuál eliges?',
+              header: 'Isla desierta',
+              multiSelect: false,
+              options: [
+                { label: 'Python 🐍', description: 'Versátil y fácil de leer' },
+                { label: 'Rust 🦀', description: 'Seguro y rápido' }
+              ]
+            }
+          ],
+          caller: { type: 'direct' }
+        }
+      }
+    ]
+
+    const result = transformAskUserQuestion(content)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].type).toBe('text')
+    const text = (result[0] as { type: 'text'; text: string }).text
+    expect(text).toContain('<!-- interactive-question -->')
+    expect(text).toContain('**Isla desierta**')
+    expect(text).toContain('¿Cuál eliges?')
+    expect(text).toContain('- Python 🐍 — Versátil y fácil de leer')
+    expect(text).toContain('- Rust 🦀 — Seguro y rápido')
+  })
+
+  it('passes through non-AskUserQuestion tool_use blocks unchanged', () => {
+    const content = [
+      { type: 'tool_use' as const, id: 'toolu_abc', name: 'Bash', input: { command: 'ls' } },
+      { type: 'text' as const, text: 'Hello world' }
+    ]
+
+    const result = transformAskUserQuestion(content)
+
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual(content[0])
+    expect(result[1]).toEqual(content[1])
+  })
+
+  it('returns AskUserQuestion block unchanged when input.questions is missing', () => {
+    const content = [
+      {
+        type: 'tool_use' as const,
+        id: 'toolu_abc',
+        name: 'AskUserQuestion',
+        input: { someOtherField: 'value' }
+      }
+    ]
+
+    const result = transformAskUserQuestion(content)
+
+    // Should pass through unchanged (no questions array to transform)
+    expect(result).toHaveLength(1)
+    expect(result[0].type).toBe('tool_use')
+  })
+
+  it('handles multiSelect questions', () => {
+    const content = [
+      {
+        type: 'tool_use' as const,
+        id: 'toolu_abc',
+        name: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: 'Select languages',
+              multiSelect: true,
+              options: [{ label: 'Go' }, { label: 'Rust' }]
+            }
+          ]
+        }
+      }
+    ]
+
+    const result = transformAskUserQuestion(content)
+
+    expect(result[0].type).toBe('text')
+    const text = (result[0] as { type: 'text'; text: string }).text
+    expect(text).toContain('*(selección múltiple)*')
   })
 })

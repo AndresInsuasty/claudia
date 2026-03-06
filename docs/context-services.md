@@ -130,7 +130,7 @@ Registered when the user launches a session from the dialog; consumed by HooksSe
 Reads `cwd` from first entry, calls `processNewTranscript()`.
 
 **`onFileChanged(filePath)`** — called when a known file grows  
-Reads only `messages.slice(watched.lastLineCount)` (new lines only), inserts them, updates cost with `requestId`-based deduplication, sends `event:messageAdded` and `event:sessionUpdated` to renderer.
+Reads only `messages.slice(watched.lastLineCount)` (new lines only), applies `transformAskUserQuestion` and `toolUseResult` attachment (parity with full parser), inserts them, updates cost with `requestId`-based deduplication, sends `event:messageAdded` and `event:sessionUpdated` to renderer.
 
 **`processNewTranscript(sessionId, projectPath, transcriptPath, win)`** — full parse
 - Parses transcript file to extract messages, costSummary, cwd, and gitBranch

@@ -73,7 +73,7 @@ export async function readFirstEntry(
  * with selectable options. We convert these into markdown-formatted text so they
  * display as readable question messages in the logs instead of raw tool calls.
  */
-function transformAskUserQuestion(content: ClaudeMessage['content']): ClaudeMessage['content'] {
+export function transformAskUserQuestion(content: ClaudeMessage['content']): ClaudeMessage['content'] {
   return content.map(block => {
     if (block.type !== 'tool_use') return block
     const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }

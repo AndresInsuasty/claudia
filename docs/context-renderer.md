@@ -319,23 +319,11 @@ Modal dialog for importing external Claude Code sessions (those not started from
 - **Thinking blocks**: `GroupedThinkingBubble` — collapsible, shows block count + word count estimate
 - **Tool blocks**: `GroupedToolsBubble` — collapsible, shows tool icons + names; expanded shows per-tool input (truncated 300 chars) + result (truncated 1000 chars) with error highlighting
   - **Special tool rendering**:
-    - `AskUserQuestion` → `QuestionBlock` — interactive question card with multiple-choice options
     - `ExitPlanMode` → `PlanBubble` — collapsible plan summary with file lists and permission requests
+- **Interactive question blocks**: `AskUserQuestion` tool_use blocks are transformed into `<!-- interactive-question -->` text blocks by `SessionParser.transformAskUserQuestion()` before reaching the renderer. Rendered inline as text groups with `isInteractiveQuestion` flag — blue-tinted bubble with "Question" badge and markdown-formatted options
 - **Text blocks**: `MarkdownRenderer` — uses `react-markdown` + `remark-gfm` + `react-syntax-highlighter` (oneDark theme); has `MdErrorBoundary` that falls back to `PlainMarkdown` on render error
 - Token usage footer: `input↑ output↓ tokens`
 - Tool icon mapping: Bash=Terminal, Read/Write=FileText, Edit/MultiEdit=Edit, Glob/Grep=Search, WebSearch/WebFetch=Globe
-
-**`QuestionBlock.tsx`** — AskUserQuestion tool renderer
-- Displays question header with lucide `HelpCircle` icon in orange
-- Question text in bold with clear formatting
-- Multiple-choice options rendered as rounded badge buttons
-- Visual states:
-  - Default: gray background with hover effect
-  - Selected: green background with checkmark icon
-  - Active: orange border for current question
-- Collapsible detailed answers section (if tool_result available)
-- Shows selected answer highlighted in green badge
-- Compact layout with proper spacing
 
 **`PlanBubble.tsx`** — ExitPlanMode tool renderer
 - Plan title/header with collapsible toggle
