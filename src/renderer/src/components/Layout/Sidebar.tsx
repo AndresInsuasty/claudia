@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { MessageSquare, FolderOpen, Settings, Plus, Search, ChevronRight } from 'lucide-react'
 import SessionItem from '../Sessions/SessionItem'
@@ -11,6 +11,14 @@ export default function Sidebar(): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const [activeExpanded, setActiveExpanded] = useState(true)
   const [inactiveExpanded, setInactiveExpanded] = useState(true)
+  const [appVersion, setAppVersion] = useState('')
+
+  useEffect(() => {
+    window.api.app
+      .getVersion()
+      .then(setAppVersion)
+      .catch(() => {})
+  }, [])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return sessions
@@ -187,6 +195,12 @@ export default function Sidebar(): React.JSX.Element {
             </div>
           )}
         </div>
+
+        {appVersion && (
+          <div className="px-4 py-2 border-t border-claude-border">
+            <span className="text-[10px] text-claude-muted">Claudia v{appVersion}</span>
+          </div>
+        )}
       </div>
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}

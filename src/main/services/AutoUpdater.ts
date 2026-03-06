@@ -1,5 +1,5 @@
 import { autoUpdater } from 'electron-updater'
-import { dialog } from 'electron'
+import { app, dialog } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { getMainWindow, sendToRenderer } from './WindowManager'
 
@@ -71,7 +71,10 @@ export function setupAutoUpdater(): void {
       })
       .then(result => {
         if (result.response === 0) {
-          autoUpdater.quitAndInstall(false, true)
+          setImmediate(() => {
+            app.removeAllListeners('window-all-closed')
+            autoUpdater.quitAndInstall(false, true)
+          })
         }
       })
   })

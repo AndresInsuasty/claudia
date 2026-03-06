@@ -15,6 +15,9 @@ import type {
 declare global {
   interface Window {
     api: {
+      app: {
+        getVersion: () => Promise<string>
+      }
       sessions: {
         list: () => Promise<Session[]>
         listByProjectAndBranch: (projectPath: string, branch?: string, includeExternal?: boolean) => Promise<Session[]>

@@ -14,6 +14,10 @@ import type {
 } from '../shared/types'
 
 const api = {
+  app: {
+    getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion')
+  },
+
   sessions: {
     resetActive: (): Promise<void> => ipcRenderer.invoke('sessions:resetActive'),
     list: (): Promise<Session[]> => ipcRenderer.invoke('sessions:list'),

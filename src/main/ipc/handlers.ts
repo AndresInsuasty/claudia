@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron'
+import { ipcMain, dialog, app } from 'electron'
 import {
   sessionDb,
   messageDb,
@@ -79,6 +79,8 @@ async function resolveClaudePath(settings: { claudeExecutablePath: string }): Pr
 const runningProcesses = new Map<number, ChildProcess>()
 
 export function registerIpcHandlers(): void {
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+
   ipcMain.handle('sessions:resetActive', () => {
     console.log('[IPC] sessions:resetActive — marking stale active sessions as completed and killing orphan terminals')
     sessionDb.resetActiveSessions()
