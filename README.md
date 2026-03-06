@@ -90,19 +90,7 @@ xattr -cr /Applications/Claudia.app
 Then open Claudia normally (double-click). **This only needs to be done once.**
 
 ---
-
-#### **Method 2: Right-Click to Open**
-
-1. **Finder** → **Applications**
-2. **Right-click** (or Control+Click) on `Claudia.app`
-3. Select **"Open"** from the menu
-4. Click **"Open"** again in the security dialog
-
-> **Note:** You MUST right-click. Double-clicking won't work.
-
----
-
-#### **Method 3: System Settings Override**
+#### **Method 2: System Settings Override**
 
 1. Try to open Claudia (it will be blocked)
 2. Go to **System Settings** → **Privacy & Security**
