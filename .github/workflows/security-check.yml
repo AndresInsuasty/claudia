@@ -117,6 +117,6 @@ jobs:
         run: npm run build
 
       - name: Package application (dry run)
-        run: npm run package:mac
+        run: npm run package:mac -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
